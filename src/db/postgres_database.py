@@ -162,7 +162,9 @@ class DatabaseFacade:
         params = []
         query, params = self._append_orchestrator_time_filter(query, params, column="scraped_at")
         query += """
-            ORDER BY scraped_at DESC
+            ORDER BY
+                CASE WHEN source = 'RSS' THEN 0 ELSE 1 END,
+                scraped_at DESC
             LIMIT %s;
         """
         params.append(limit)
@@ -220,7 +222,10 @@ class DatabaseFacade:
         params = [ig, category]
         query, params = self._append_orchestrator_time_filter(query, params, column="scraped_at")
         query += """
-            ORDER BY (data->>'quality_score')::int DESC, scraped_at DESC
+            ORDER BY
+                (data->>'quality_score')::int DESC,
+                CASE WHEN source = 'RSS' THEN 0 ELSE 1 END,
+                scraped_at DESC
             LIMIT %s;
         """
         params.append(limit)

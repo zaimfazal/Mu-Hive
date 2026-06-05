@@ -10,7 +10,7 @@ from src.config.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 
 # --- Pipeline Configuration ---
-INTELLIGENCE_BATCH_LIMIT = 15
+INTELLIGENCE_BATCH_LIMIT = 25
 
 async def run_pipeline():
     """Executes the full Mu-Hive intelligence pipeline sequentially.

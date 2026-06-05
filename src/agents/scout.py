@@ -27,6 +27,7 @@ SCRAPE_LIMIT = 50
 TIMEOUT = 30
 PW_WAIT_MS = 4000
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
+feedparser.USER_AGENT = USER_AGENT
 
 try:
     import warnings
@@ -102,6 +103,24 @@ def clean_html(html_content):
 def run_rss_scout(db: Database):
     logger.info("Running RSS Scout...")
     new_count = 0
+    seen_titles: list[tuple] = []  # (word_set, title) for duplicate detection
+
+    def _title_words(title: str) -> set:
+        return set(title.lower().split()) - {"the", "a", "an", "is", "in", "on", "of", "and", "to", "for", "with", "at", "by"}
+
+    def _is_near_duplicate(title: str) -> bool:
+        words = _title_words(title)
+        if len(words) < 3:
+            return False
+        for seen_words, _ in seen_titles:
+            if not seen_words:
+                continue
+            intersection = words & seen_words
+            union = words | seen_words
+            if len(union) > 0 and len(intersection) / len(union) > 0.8:
+                return True
+        return False
+
     for ig, feeds in ALL_RSS_FEEDS.items():
         for feed_url in feeds:
             try:
@@ -118,14 +137,23 @@ def run_rss_scout(db: Database):
 
                     title = entry.get("title", "").strip()
                     link = entry.get("link", "").strip()
+
+                    if not title or not link:
+                        continue
+
+                    # Near-duplicate detection
+                    if _is_near_duplicate(title):
+                        logger.info(f"  [Skip] Near-duplicate: {title[:60]}")
+                        continue
+                    seen_titles.append((_title_words(title), title))
+
                     summary_raw = entry.get("summary", "")
                     if not summary_raw and "content" in entry:
                         summary_raw = entry.content[0].value
                     summary = clean_html(summary_raw)
 
-                    if title and link:
-                        if db.insert_opportunity(title, link, summary, source_engine="RSS", ig_tags=[ig], category="News"):
-                            new_count += 1
+                    if db.insert_opportunity(title, link, summary, source_engine="RSS", ig_tags=[ig], category="News"):
+                        new_count += 1
             except Exception as e:
                 logger.error(f"RSS error on {feed_url}: {e}")
     logger.info(f"RSS Scout inserted {new_count} new opportunities.")

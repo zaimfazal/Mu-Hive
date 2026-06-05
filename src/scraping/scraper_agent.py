@@ -29,6 +29,7 @@ PW_WAIT_MS   = 4000    # ms to wait after page load for JS
 MAX_IMAGES   = 5       # max images extracted (URLs only)
 USER_AGENT   = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
+feedparser.USER_AGENT = USER_AGENT
  
  
 # ── Text extraction ───────────────────────────────────────────────────────────
@@ -210,9 +211,28 @@ async def run_rss_agent():
     logger.info(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] RSS scraper starting...")
     db        = DatabaseFacade()
     seen_urls = set()
+    seen_titles: list[set] = []  # List of (word_set, title_str) for duplicate detection
     semaphore = asyncio.Semaphore(5)
 
     SPAM_DOMAINS = ["bloguerosa.com", "qodsblog.com", "blogdeazar.com", "blazingblog.com"]
+
+    def _title_words(title: str) -> set:
+        """Extract lowercase word set from a title for similarity comparison."""
+        return set(title.lower().split()) - {"the", "a", "an", "is", "in", "on", "of", "and", "to", "for", "with", "at", "by"}
+
+    def _is_near_duplicate(title: str) -> bool:
+        """Check if a title is >80% similar (Jaccard) to any previously seen title."""
+        words = _title_words(title)
+        if len(words) < 3:
+            return False
+        for seen_words, _ in seen_titles:
+            if not seen_words:
+                continue
+            intersection = words & seen_words
+            union = words | seen_words
+            if len(union) > 0 and len(intersection) / len(union) > 0.8:
+                return True
+        return False
 
     async def process_rss_feed(feed_url, browser, ig_category):
         try:
@@ -241,6 +261,13 @@ async def run_rss_agent():
                     if link in seen_urls:
                         continue
                     seen_urls.add(link)
+
+                    # Near-duplicate detection across feeds
+                    if _is_near_duplicate(title):
+                        logger.info(f"  [Skip] Near-duplicate title: {title[:60]}")
+                        continue
+                    seen_titles.append((_title_words(title), title))
+
                     if db.link_exists(link, ig_category):
                         logger.info(f"  [Skip] Already in DB: {link[:60]}")
                         continue
@@ -262,6 +289,16 @@ async def run_rss_agent():
                         from bs4 import BeautifulSoup as _BS
                         rss_summary = _BS(rss_summary, "html.parser").get_text(separator=' ', strip=True)
 
+                    # Extract published timestamp for recency bonus in intelligence agent
+                    import calendar
+                    published_at = None
+                    pub_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+                    if pub_parsed:
+                        try:
+                            published_at = calendar.timegm(pub_parsed)
+                        except Exception:
+                            pass
+
                     item_data = {
                         "summary": rss_summary,
                         "category": "News",
@@ -270,6 +307,8 @@ async def run_rss_agent():
                         "scraped_page_title": result["page_title"],
                         "scraped_meta_description": result["meta_description"],
                     }
+                    if published_at is not None:
+                        item_data["published_at"] = published_at
 
                     doc_id = db.scrapes.insert_queue(
                         title, link, ig_category, "RSS", "scraped", data=item_data

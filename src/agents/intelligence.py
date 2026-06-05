@@ -2,6 +2,7 @@ import logging
 import time
 import re
 from typing import List
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent
 import asyncio
@@ -9,6 +10,7 @@ import asyncio
 from src.db.postgres_database import DatabaseFacade as Database
 from src.config.agent_config import model
 from src.config.logging_config import setup_logging
+from src.config.sources import SOURCE_PRIORITY
 from src.agents.planner import MVP_IGS
 from src.agents.summarizer import summarizer_agent
 
@@ -76,6 +78,21 @@ Your job is to evaluate scraped articles/opportunities and classify them into th
 - **Web Development**: Frontend/backend development, JavaScript, TypeScript, React, Next.js, Node.js, Django, Flask, Vue, Angular, HTML/CSS, web frameworks, APIs, DevOps, cloud deployment.
 - **Cyber Security**: Cybersecurity, infosec, ethical hacking, penetration testing, CTFs, vulnerability disclosures, malware analysis, threat intelligence, SOC, network security, zero-day exploits, trojans, phishing, ransomware, NFC attacks, data breaches, APT campaigns.
 - **UI/UX**: User experience design, user interface design, UX research, Figma, prototyping, wireframing, interaction design, product design, usability testing, design systems.
+
+## Importance & Trendiness Scoring:
+Score HIGHER (8-10) if the article covers:
+- A major product launch, model release, or research breakthrough
+- A significant security incident, zero-day vulnerability, or data breach
+- An industry-shaping announcement (large funding round, acquisition, major open-source release)
+- A viral or trending topic in the tech community
+- Original research or first-party announcements from major labs (OpenAI, Google, Meta, etc.)
+
+Score LOWER (1-5) if the article covers:
+- Tutorial or how-to content (useful but not breaking news)
+- Minor updates, patch notes, or incremental feature releases
+- Rehashed or rewritten content from other sources
+- Listicles, opinion pieces, or speculative commentary without new information
+- Promotional content or thinly veiled advertisements
 
 ## Strict Classification Rules:
 1. ONLY tag an IG if the content is DIRECTLY and PRIMARILY about that domain. Do NOT tag loosely related content.
@@ -222,7 +239,26 @@ async def run_intelligence(batch_limit=15):
                 result = await run_agent_with_retry(intelligence_agent, prompt)
                 intelligence: OpportunityIntelligence = result.output
 
-                final_score = intelligence.quality_score if intelligence.is_relevant else 0
+                raw_score = intelligence.quality_score if intelligence.is_relevant else 0
+
+                # ── Source boost: RSS +2, API +1, Search +0 ──
+                source_engine = doc.get("source", "")
+                source_boost = SOURCE_PRIORITY.get(source_engine, 0)
+
+                # ── Recency bonus: +1 for articles published < 24 hours ago ──
+                recency_bonus = 0
+                json_data = doc.get("data") or {}
+                published_at = json_data.get("published_at")
+                if published_at:
+                    try:
+                        hours_ago = (time.time() - float(published_at)) / 3600
+                        if hours_ago < 24:
+                            recency_bonus = 1
+                    except (ValueError, TypeError):
+                        pass
+
+                # Final score: LLM score + source boost + recency, capped at 10
+                final_score = min(10, raw_score + source_boost + recency_bonus) if raw_score > 0 else 0
 
                 # Post-LLM validation to catch misclassifications
                 validated_tags = _validate_tags(intelligence.ig_tags, source_ig)
@@ -247,7 +283,8 @@ async def run_intelligence(batch_limit=15):
                 db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary)
                 processed_count += 1
                 logger.info(
-                    f"  -> Score: {final_score} | Tags: {validated_tags} | {intelligence.reasoning}"
+                    f"  -> Score: {raw_score} (LLM) + {source_boost} (source) + {recency_bonus} (recency) = {final_score} | "
+                    f"Tags: {validated_tags} | {intelligence.reasoning}"
                 )
 
                 await asyncio.sleep(3)
