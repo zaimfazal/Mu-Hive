@@ -256,17 +256,26 @@ async def run_rss_agent():
                         logger.info(f"  [Fail] RSS item scrape failed: {link[:50]}")
                         continue
 
-                    doc_id = db.insert_event(title, link, ig_category, "RSS", "scraped")
+                    # Build data dict with RSS summary and category for downstream agents
+                    rss_summary = entry.get("summary", "")
+                    if rss_summary:
+                        from bs4 import BeautifulSoup as _BS
+                        rss_summary = _BS(rss_summary, "html.parser").get_text(separator=' ', strip=True)
+
+                    item_data = {
+                        "summary": rss_summary,
+                        "category": "News",
+                        "ig_tags": [ig_category],
+                        "scraped_full_text": result["text"],
+                        "scraped_page_title": result["page_title"],
+                        "scraped_meta_description": result["meta_description"],
+                    }
+
+                    doc_id = db.scrapes.insert_queue(
+                        title, link, ig_category, "RSS", "scraped", data=item_data
+                    )
                     if doc_id:
-                        ok = db.update_event_scrape(
-                            doc_id,
-                            status="scraped",
-                            scraped_page_title=result["page_title"],
-                            scraped_meta_description=result["meta_description"],
-                            scraped_full_text=result["text"],
-                            scrape_layer=result["layer"],
-                        )
-                        logger.info(f"  [{'saved' if ok else 'warn: no match'}:{link[:40]}] "
+                        logger.info(f"  [saved:{link[:40]}] "
                                     f"(RSS) layer={result['layer']} words={len(result['text'].split())}")
         except Exception as e:
             logger.info(f"[RSS Error] {feed_url} -> {e}")

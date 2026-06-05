@@ -10,6 +10,7 @@ from src.db.postgres_database import DatabaseFacade as Database
 from src.config.agent_config import model
 from src.config.logging_config import setup_logging
 from src.agents.planner import MVP_IGS
+from src.agents.summarizer import summarizer_agent
 
 logger = logging.getLogger(__name__)
 MAX_LLM_API_ERRORS_BEFORE_FAIL = 5
@@ -163,6 +164,24 @@ def _extract_status_code(exc: Exception) -> int | None:
     return None
 
 
+async def run_agent_with_retry(agent, prompt, max_retries=3, initial_delay=5):
+    """Runs a pydantic-ai agent with exponential backoff on 429 rate limit errors."""
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            return await agent.run(prompt)
+        except Exception as e:
+            status_code = _extract_status_code(e)
+            if status_code == 429 and attempt < max_retries:
+                logger.warning(
+                    f"LLM API returned 429 (Rate Limit). Retrying in {delay}s (Attempt {attempt+1}/{max_retries})..."
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+            else:
+                raise e
+
+
 async def run_intelligence(batch_limit=15):
     """
     Evaluates and classifies unprocessed opportunities using the LLM.
@@ -200,7 +219,7 @@ async def run_intelligence(batch_limit=15):
             logger.info(f"Evaluating ID {item_id}: {title[:60]}...")
 
             try:
-                result = await intelligence_agent.run(prompt)
+                result = await run_agent_with_retry(intelligence_agent, prompt)
                 intelligence: OpportunityIntelligence = result.output
 
                 final_score = intelligence.quality_score if intelligence.is_relevant else 0
@@ -208,7 +227,24 @@ async def run_intelligence(batch_limit=15):
                 # Post-LLM validation to catch misclassifications
                 validated_tags = _validate_tags(intelligence.ig_tags, source_ig)
 
-                db.update_intelligence(item_id, final_score, validated_tags)
+                # Generate LLM summary for high-quality items (Bug 7 fix)
+                generated_summary = None
+                if final_score >= 6 and category in ("News", "Unknown"):
+                    try:
+                        summary_prompt = (
+                            f"Title: {title}\n"
+                            f"Interest Groups: {', '.join(validated_tags)}\n"
+                            f"Content: {content[:1500]}\n\n"
+                            "Write a crisp 1-sentence summary."
+                        )
+                        summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
+                        generated_summary = summary_result.output.summary
+                        logger.info(f"  -> Summary: {generated_summary[:80]}...")
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
+
+                db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary)
                 processed_count += 1
                 logger.info(
                     f"  -> Score: {final_score} | Tags: {validated_tags} | {intelligence.reasoning}"

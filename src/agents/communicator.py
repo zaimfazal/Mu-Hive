@@ -129,6 +129,48 @@ def format_hackathon_details(opp: dict) -> str:
     return details
 
 
+def format_internship_details(opp: dict) -> str:
+    """Format an internship with available metadata."""
+    title = strip_html(opp.get('title', 'No Title'))
+    link = opp.get('link', '')
+    summary = opp.get('summary', '')
+    
+    display_url = truncate_url(link)
+    details = f"[bold]{title}[/bold]\n"
+    details += f"[blue][link={link}]{display_url}[/link][/blue]\n"
+    
+    # Try to parse structured fields from summary
+    fields = parse_hackathon_summary(summary)
+    
+    if fields:
+        if fields.get("Platform"):
+            details += f"[dim]🏢 Platform:[/dim] {fields['Platform']}\n"
+        if fields.get("Company"):
+            details += f"[dim]🏛️  Company:[/dim] {fields['Company']}\n"
+        if fields.get("Start") or fields.get("Deadline"):
+            date_val = fields.get("Start") or fields.get("Deadline", "TBA")
+            details += f"[dim]📅 Date:[/dim] {date_val}\n"
+        if fields.get("Location"):
+            details += f"[dim]📍 Location:[/dim] {fields['Location']}\n"
+        if fields.get("Duration"):
+            details += f"[dim]⏱️  Duration:[/dim] {fields['Duration']}\n"
+        if fields.get("Stipend"):
+            details += f"[dim]💰 Stipend:[/dim] {fields['Stipend']}\n"
+        if fields.get("Eligibility"):
+            details += f"[dim]🎯 Eligible:[/dim] {fields['Eligibility']}\n"
+        if fields.get("Tags"):
+            details += f"[dim]🏷️  Tags:[/dim] {fields['Tags']}"
+    else:
+        # Fallback: display raw summary truncated
+        if summary:
+            clean = strip_html(summary)
+            if len(clean) > 200:
+                clean = clean[:197].rsplit(' ', 1)[0] + "..."
+            details += f"[dim]{clean}[/dim]"
+    
+    return details
+
+
 def format_digest(ig, opportunities_by_cat):
     """Prints a curated digest block for terminal display using Rich."""
     ig_icon = IG_ICONS.get(ig, "📌")
@@ -139,8 +181,9 @@ def format_digest(ig, opportunities_by_cat):
         padding=(0, 2),
     ))
     
-    # Categories that get structured hackathon formatting
+    # Categories that get structured hackathon/event formatting
     structured_categories = {"hackathons", "events", "workshops"}
+    internship_categories = {"internships"}
     
     for cat_name, opps in opportunities_by_cat.items():
         if not opps: continue
@@ -159,6 +202,8 @@ def format_digest(ig, opportunities_by_cat):
         for opp in opps:
             if cat_name.lower() in structured_categories:
                 details = format_hackathon_details(opp)
+            elif cat_name.lower() in internship_categories:
+                details = format_internship_details(opp)
             else:
                 details = format_news_details(opp)
             

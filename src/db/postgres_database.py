@@ -184,7 +184,7 @@ class DatabaseFacade:
             
         return rows
 
-    def update_intelligence(self, item_id, score, tags):
+    def update_intelligence(self, item_id, score, tags, generated_summary=None):
         """Update item after LLM evaluation."""
         with db_conn.get_cursor() as cur:
             # Fetch current data to preserve other fields
@@ -194,6 +194,10 @@ class DatabaseFacade:
             
             data['quality_score'] = score
             data['validated_tags'] = tags
+            
+            # Store LLM-generated summary if available (Bug 7 fix)
+            if generated_summary:
+                data['summary'] = generated_summary
             
             status = 'processed' if score > 0 else 'irrelevant'
             
@@ -230,8 +234,18 @@ class DatabaseFacade:
         for row in rows:
             row['_id'] = row['id']
             json_data = row.get('data') or {}
-            row['summary'] = json_data.get('summary')
+            # Extract quality_score from JSONB (Bug 1 fix)
+            row['quality_score'] = json_data.get('quality_score', 0)
+            # Summary fallback chain (Bug 2 fix)
+            row['summary'] = (
+                json_data.get('summary')
+                or json_data.get('scraped_meta_description')
+                or (json_data.get('scraped_full_text', '') or '')[:300]
+                or ''
+            )
             row['link'] = row['url']
+            row['source_engine'] = row.get('source', '')
+            row['category'] = json_data.get('category', 'Unknown')
         return rows
         
     def close(self):

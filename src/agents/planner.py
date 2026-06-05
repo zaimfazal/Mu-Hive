@@ -30,7 +30,7 @@ def plan_digests():
                         "summary": r.get("summary", ""),
                         "link": r.get("link", ""),
                         "score": r.get("quality_score", 0),
-                        "source_engine": r.get("source_engine", ""),
+                        "source_engine": r.get("source_engine", r.get("source", "")),
                         "category": cat,
                         "created_at": r.get("created_at", None),
                     })

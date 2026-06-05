@@ -23,12 +23,29 @@ def _to_plain_event(event: object) -> dict:
 
 
 def _build_hackathon_summary(event: dict) -> str:
-    return (
-        f"Platform: {event.get('platform', 'Unknown')}\n"
-        f"Start: {event.get('startDate', 'TBA')}\n"
-        f"Location: {event.get('location', 'Online')}\n"
-        f"Days Remaining: {event.get('days_remaining', 'Unknown')}"
-    )
+    """Build a structured Key: Value summary with all available metadata."""
+    lines = [
+        f"Platform: {event.get('platform', 'Unknown')}",
+        f"Start: {event.get('startDate', 'TBA')}",
+        f"End: {event.get('endDate', 'TBA')}",
+        f"Location: {event.get('location', 'Online')}",
+    ]
+    prize = event.get('prizePool', '')
+    if prize and prize not in ('', 'TBA'):
+        lines.append(f"Prize Pool: {prize}")
+    cost = event.get('cost', '')
+    if cost:
+        lines.append(f"Cost: {cost}")
+    elig = event.get('eligibility', '')
+    if elig:
+        lines.append(f"Eligibility: {elig}")
+    tags = event.get('tags', [])
+    if tags and isinstance(tags, list):
+        lines.append(f"Tags: {', '.join(str(t) for t in tags)}")
+    days = event.get('days_remaining')
+    if days is not None:
+        lines.append(f"Days Remaining: {days}")
+    return "\n".join(lines)
 
 
 def _normalize_ig(ig: str) -> str:
