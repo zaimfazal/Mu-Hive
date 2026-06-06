@@ -22,30 +22,7 @@ def _to_plain_event(event: object) -> dict:
     return vars(event)
 
 
-def _build_hackathon_summary(event: dict) -> str:
-    """Build a structured Key: Value summary with all available metadata."""
-    lines = [
-        f"Platform: {event.get('platform', 'Unknown')}",
-        f"Start: {event.get('startDate', 'TBA')}",
-        f"End: {event.get('endDate', 'TBA')}",
-        f"Location: {event.get('location', 'Online')}",
-    ]
-    prize = event.get('prizePool', '')
-    if prize and prize not in ('', 'TBA'):
-        lines.append(f"Prize Pool: {prize}")
-    cost = event.get('cost', '')
-    if cost:
-        lines.append(f"Cost: {cost}")
-    elig = event.get('eligibility', '')
-    if elig:
-        lines.append(f"Eligibility: {elig}")
-    tags = event.get('tags', [])
-    if tags and isinstance(tags, list):
-        lines.append(f"Tags: {', '.join(str(t) for t in tags)}")
-    days = event.get('days_remaining')
-    if days is not None:
-        lines.append(f"Days Remaining: {days}")
-    return "\n".join(lines)
+
 
 
 def _normalize_ig(ig: str) -> str:
@@ -64,6 +41,9 @@ def _ensure_events_schema() -> None:
                 summary TEXT,
                 apply_link TEXT,
                 validity_score INTEGER,
+                platform TEXT,
+                location TEXT,
+                days_left INTEGER,
                 mail_sent BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -76,6 +56,9 @@ def _ensure_events_schema() -> None:
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS summary TEXT;")
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS apply_link TEXT;")
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS validity_score INTEGER;")
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS platform TEXT;")
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS location TEXT;")
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS days_left INTEGER;")
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mail_sent BOOLEAN DEFAULT FALSE;")
         cur.execute(
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;"
@@ -89,9 +72,12 @@ def _upsert_event_without_constraint(
     *,
     title: str,
     ig: str,
-    summary: str,
+    summary: str | None,
     apply_link: str,
     validity_score: int,
+    platform: str | None = None,
+    location: str | None = None,
+    days_left: int | None = None,
 ) -> int:
     now = datetime.now(timezone.utc)
     with db_conn.get_cursor() as cur:
@@ -110,22 +96,26 @@ def _upsert_event_without_constraint(
                     category = %s,
                     summary = %s,
                     validity_score = %s,
+                    platform = %s,
+                    location = %s,
+                    days_left = %s,
                     updated_at = %s
                 WHERE id = %s;
                 """,
-                (title, ig, "Hackathons", summary, validity_score, now, existing[0]),
+                (title, ig, "Hackathons", summary, validity_score, platform, location, days_left, now, existing[0]),
             )
             return existing[0]
 
         cur.execute(
             """
             INSERT INTO events (
-                title, ig, category, summary, apply_link, validity_score, updated_at
+                title, ig, category, summary, apply_link, validity_score,
+                platform, location, days_left, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
-            (title, ig, "Hackathons", summary, apply_link, validity_score, now),
+            (title, ig, "Hackathons", summary, apply_link, validity_score, platform, location, days_left, now),
         )
         return cur.fetchone()[0]
 
@@ -149,17 +139,22 @@ def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
             if not link:
                 continue
 
-            summary = _build_hackathon_summary(event)
-            source_engine = event.get("platform", "API")
+            # Extract metadata into dedicated columns
+            platform = event.get("platform", None)
+            location = event.get("location", None)
+            days_left = event.get("days_remaining", None)
+            source_engine = platform or "API"
 
+            # Summary is left NULL here — it will be populated later
+            # by the Intelligence Agent (Groq) in Phase 2.
             inserted = db.insert_opportunity(
                 title=title,
                 link=link,
-                summary=summary,
+                summary=None,
                 source_engine=source_engine,
                 ig_tags=[normalized_ig],
                 category="Hackathons",
-                is_processed=True,
+                is_processed=False,
                 quality_score=DEFAULT_QUALITY_SCORE,
             )
             if inserted:
@@ -168,9 +163,12 @@ def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
             _upsert_event_without_constraint(
                 title=title,
                 ig=normalized_ig,
-                summary=summary,
+                summary=None,
                 apply_link=link,
                 validity_score=DEFAULT_QUALITY_SCORE,
+                platform=platform,
+                location=location,
+                days_left=days_left,
             )
             upserted_events += 1
 

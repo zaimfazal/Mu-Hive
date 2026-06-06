@@ -264,6 +264,21 @@ class DatabaseFacade:
             row['category'] = json_data.get('category', 'Unknown')
         return rows
         
+    def update_event_summary_by_link(self, link: str, summary: str):
+        """Update the events table summary for a given apply_link after Groq generates it."""
+        if not link or not summary:
+            return False
+        with db_conn.get_cursor() as cur:
+            cur.execute(
+                """
+                UPDATE events
+                SET summary = %s, updated_at = %s
+                WHERE apply_link = %s AND (summary IS NULL OR summary = '');
+                """,
+                (summary, datetime.now(timezone.utc), link),
+            )
+            return cur.rowcount > 0
+
     def close(self):
         # Postgres connection is persistent, ignore.
         pass

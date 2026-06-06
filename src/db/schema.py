@@ -26,6 +26,9 @@ def initialize_schema():
                     summary TEXT,
                     apply_link TEXT UNIQUE,
                     validity_score INTEGER,
+                    platform TEXT,
+                    location TEXT,
+                    days_left INTEGER,
                     mail_sent BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

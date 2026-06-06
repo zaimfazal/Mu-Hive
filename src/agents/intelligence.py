@@ -60,11 +60,7 @@ class OpportunityIntelligence(BaseModel):
         seen = set()
         for tag in tags or []:
             normalized = _normalize_ig(tag)
-            if not normalized:
-                raise ValueError(
-                    f"Unsupported IG tag: {tag!r}. Allowed tags: {', '.join(MVP_IGS)}."
-                )
-            if normalized not in seen:
+            if normalized and normalized not in seen:
                 normalized_tags.append(normalized)
                 seen.add(normalized)
         return normalized_tags
@@ -289,29 +285,28 @@ async def run_intelligence(batch_limit=15):
 
                 generated_summary = None
                 if final_score >= 6:
-                    if final_category == "Hackathons" and intelligence.structured_metadata:
-                        meta_lines = []
-                        for k, v in intelligence.structured_metadata.items():
-                            if v:
-                                meta_lines.append(f"{k}: {v}")
-                        if meta_lines:
-                            generated_summary = "\n".join(meta_lines)
-                    elif final_category == "News" or final_category == "Unknown":
-                        try:
-                            summary_prompt = (
-                                f"Title: {title}\n"
-                                f"Interest Groups: {', '.join(validated_tags)}\n"
-                                f"Content: {content[:1500]}\n\n"
-                                "Write a crisp 1-sentence summary."
-                            )
-                            summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
-                            generated_summary = summary_result.output.summary
-                            logger.info(f"  -> Summary: {generated_summary[:80]}...")
-                            await asyncio.sleep(1)
-                        except Exception as e:
-                            logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
+                    try:
+                        summary_prompt = (
+                            f"Title: {title}\n"
+                            f"Interest Groups: {', '.join(validated_tags)}\n"
+                            f"Category: {final_category}\n"
+                            f"Content: {content[:1500]}\n\n"
+                            "Write a crisp 1-sentence summary."
+                        )
+                        summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
+                        generated_summary = summary_result.output.summary
+                        logger.info(f"  -> Summary: {generated_summary[:80]}...")
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
 
                 db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary, category=final_category)
+
+                # Sync the Groq-generated summary to the events table
+                if generated_summary:
+                    link = doc.get("url", "")
+                    if link:
+                        db.update_event_summary_by_link(link, generated_summary)
                 processed_count += 1
                 logger.info(
                     f"  -> Score: {raw_score} (LLM) + {source_boost} (source) + {recency_bonus} (recency) = {final_score} | "
