@@ -15,9 +15,6 @@ console = Console()
 CATEGORY_ICONS = {
     "News": "📰",
     "Hackathons": "💻",
-    "Internships": "🎓",
-    "Events": "📅",
-    "Workshops": "🛠️",
 }
 
 # --- Emoji icons for each Interest Group ---
@@ -181,8 +178,8 @@ def format_digest(ig, opportunities_by_cat):
         padding=(0, 2),
     ))
     
-    # Categories that get structured hackathon/event formatting
-    structured_categories = {"hackathons", "events", "workshops"}
+    # Categories that get structured hackathon formatting
+    structured_categories = {"hackathons"}
     internship_categories = {"internships"}
     
     for cat_name, opps in opportunities_by_cat.items():

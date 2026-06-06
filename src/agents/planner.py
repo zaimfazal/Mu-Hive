@@ -16,7 +16,7 @@ def plan_digests():
     db = Database()
     digests = {}
     
-    categories = ["News", "Hackathons", "Internships", "Events", "Workshops"]
+    categories = ["News", "Hackathons"]
 
     for ig in MVP_IGS:
         opportunities_by_cat = {}

@@ -45,6 +45,13 @@ class OpportunityIntelligence(BaseModel):
     ig_tags: List[str] = Field(
         description=f"Select the most relevant Interest Groups from: {', '.join(MVP_IGS)}. Must select at least one if relevant."
     )
+    category: str = Field(
+        description="Must be exactly 'News' or 'Hackathons'. Use 'Hackathons' ONLY for actual upcoming hackathon/competition listings with registration links. Everything else (articles, tutorials, announcements, opinion pieces) is 'News'."
+    )
+    structured_metadata: dict | None = Field(
+        default=None,
+        description="ONLY when category='Hackathons': extract available fields as {'Platform': '', 'Start': '', 'End': '', 'Location': '', 'Mode': 'Online/Offline/Hybrid', 'Prize Pool': '', 'Registration Link': '', 'Cost': '', 'Eligibility': ''}. For News, return null."
+    )
 
     @field_validator("ig_tags")
     @classmethod
@@ -79,28 +86,44 @@ Your job is to evaluate scraped articles/opportunities and classify them into th
 - **Cyber Security**: Cybersecurity, infosec, ethical hacking, penetration testing, CTFs, vulnerability disclosures, malware analysis, threat intelligence, SOC, network security, zero-day exploits, trojans, phishing, ransomware, NFC attacks, data breaches, APT campaigns.
 - **UI/UX**: User experience design, user interface design, UX research, Figma, prototyping, wireframing, interaction design, product design, usability testing, design systems.
 
-## Importance & Trendiness Scoring:
-Score HIGHER (8-10) if the article covers:
-- A major product launch, model release, or research breakthrough
-- A significant security incident, zero-day vulnerability, or data breach
-- An industry-shaping announcement (large funding round, acquisition, major open-source release)
-- A viral or trending topic in the tech community
-- Original research or first-party announcements from major labs (OpenAI, Google, Meta, etc.)
+## Category Rules (STRICT — only 2 categories exist):
+- **Hackathons**: ONLY for actual upcoming hackathon/competition listings that people can register for. Must have a registration link or signup page. An article *about* a hackathon or reporting on hackathon results is NOT a hackathon — it is News.
+- **News**: Everything else — articles, tutorials, announcements, opinion pieces, research papers, product launches, blog posts, reports, etc.
 
-Score LOWER (1-5) if the article covers:
-- Tutorial or how-to content (useful but not breaking news)
-- Minor updates, patch notes, or incremental feature releases
+## Trending & Hot-Topic Scoring (AI moves fast — prioritize what matters NOW):
+Score 9-10 (GROUNDBREAKING / MUST-READ):
+- New frontier model releases (GPT-5, Gemini 3, Claude 4, Llama 4, etc.)
+- Major open-source model drops (new SOTA on benchmarks)
+- Critical zero-day vulnerabilities or massive data breaches
+- Paradigm shifts: new architectures, novel training methods, agentic AI breakthroughs
+- First-party announcements from OpenAI, Google DeepMind, Anthropic, Meta AI, xAI, Mistral
+
+Score 7-8 (HIGH VALUE / TRENDING):
+- Significant product launches, API releases, framework updates (e.g., new React version, major library release)
+- Trending community discussions (viral posts, controversial takes with substance)
+- Important research papers with real-world implications
+- Major funding rounds, acquisitions, or strategic partnerships in AI/tech
+- New developer tools or platforms that change workflows
+
+Score 5-6 (USEFUL / INFORMATIVE):
+- Solid tutorials on cutting-edge topics (RAG, fine-tuning, agents)
+- Industry analysis and trend reports with original data
+- Conference talk summaries with novel insights
+- Security advisories and patch announcements
+
+Score 1-4 (LOW PRIORITY):
 - Rehashed or rewritten content from other sources
-- Listicles, opinion pieces, or speculative commentary without new information
+- Generic listicles, opinion pieces without new information
+- Minor patch notes, incremental updates
 - Promotional content or thinly veiled advertisements
+- Old news or outdated content
 
 ## Strict Classification Rules:
 1. ONLY tag an IG if the content is DIRECTLY and PRIMARILY about that domain. Do NOT tag loosely related content.
 2. Political news, sports, entertainment, world events, opinion pieces about non-tech topics, and general business news are NEVER relevant. Set is_relevant=False and quality_score=1 for these.
 3. If the content mentions tech only tangentially (e.g., a political article that briefly mentions AI policy), it is NOT relevant.
-4. Be strict with quality scores: 1-3 = low quality/irrelevant, 4-5 = borderline, 6-7 = good, 8-9 = very good, 10 = groundbreaking.
-5. If content has no clear connection to ANY tech Interest Group, set is_relevant=False and quality_score=1.
-6. A single article can belong to multiple IGs ONLY if it substantively covers multiple domains.
+4. If content has no clear connection to ANY tech Interest Group, set is_relevant=False and quality_score=1.
+5. A single article can belong to multiple IGs ONLY if it substantively covers multiple domains.
 
 ## Common Misclassification Errors — DO NOT make these mistakes:
 - Malware, trojans, phishing, NFC attacks, data breaches, ransomware, APT groups → these are ONLY "Cyber Security", NEVER "AI"
@@ -262,29 +285,37 @@ async def run_intelligence(batch_limit=15):
 
                 # Post-LLM validation to catch misclassifications
                 validated_tags = _validate_tags(intelligence.ig_tags, source_ig)
+                final_category = intelligence.category
 
-                # Generate LLM summary for high-quality items (Bug 7 fix)
                 generated_summary = None
-                if final_score >= 6 and category in ("News", "Unknown"):
-                    try:
-                        summary_prompt = (
-                            f"Title: {title}\n"
-                            f"Interest Groups: {', '.join(validated_tags)}\n"
-                            f"Content: {content[:1500]}\n\n"
-                            "Write a crisp 1-sentence summary."
-                        )
-                        summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
-                        generated_summary = summary_result.output.summary
-                        logger.info(f"  -> Summary: {generated_summary[:80]}...")
-                        await asyncio.sleep(1)
-                    except Exception as e:
-                        logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
+                if final_score >= 6:
+                    if final_category == "Hackathons" and intelligence.structured_metadata:
+                        meta_lines = []
+                        for k, v in intelligence.structured_metadata.items():
+                            if v:
+                                meta_lines.append(f"{k}: {v}")
+                        if meta_lines:
+                            generated_summary = "\n".join(meta_lines)
+                    elif final_category == "News" or final_category == "Unknown":
+                        try:
+                            summary_prompt = (
+                                f"Title: {title}\n"
+                                f"Interest Groups: {', '.join(validated_tags)}\n"
+                                f"Content: {content[:1500]}\n\n"
+                                "Write a crisp 1-sentence summary."
+                            )
+                            summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
+                            generated_summary = summary_result.output.summary
+                            logger.info(f"  -> Summary: {generated_summary[:80]}...")
+                            await asyncio.sleep(1)
+                        except Exception as e:
+                            logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
 
-                db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary)
+                db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary, category=final_category)
                 processed_count += 1
                 logger.info(
                     f"  -> Score: {raw_score} (LLM) + {source_boost} (source) + {recency_bonus} (recency) = {final_score} | "
-                    f"Tags: {validated_tags} | {intelligence.reasoning}"
+                    f"Tags: {validated_tags} | Category: {final_category} | {intelligence.reasoning}"
                 )
 
                 await asyncio.sleep(3)

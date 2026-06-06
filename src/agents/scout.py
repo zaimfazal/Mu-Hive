@@ -46,9 +46,6 @@ SEARCH_QUERIES = {
             "generative AI industry updates",
         ],
         "hackathons": ["AI machine learning hackathon 2026"],
-        "internships": ["machine learning AI internship 2026"],
-        "events": ["AI conference summit tech event 2026"],
-        "workshops": ["AI deep learning hands-on workshop 2026"],
     },
     "Web Development": {
         "news": [
@@ -56,9 +53,6 @@ SEARCH_QUERIES = {
             "frontend backend web dev trends",
         ],
         "hackathons": ["web development hackathon frontend backend 2026"],
-        "internships": ["web developer frontend backend internship 2026"],
-        "events": ["web development conference meetup 2026"],
-        "workshops": ["React Node.js web development workshop 2026"],
     },
     "UI/UX": {
         "news": [
@@ -66,9 +60,6 @@ SEARCH_QUERIES = {
             "Figma UI design product design updates",
         ],
         "hackathons": ["UI UX design hackathon designathon 2026"],
-        "internships": ["UX designer product design internship 2026"],
-        "events": ["UX UI design conference summit 2026"],
-        "workshops": ["Figma prototyping UX design workshop 2026"],
     },
     "Cyber Security": {
         "news": [
@@ -76,9 +67,6 @@ SEARCH_QUERIES = {
             "infosec security breach advisory news",
         ],
         "hackathons": ["CTF capture the flag cybersecurity hackathon 2026"],
-        "internships": ["cybersecurity SOC analyst intern 2026"],
-        "events": ["cybersecurity infosec conference 2026"],
-        "workshops": ["penetration testing ethical hacking workshop 2026"],
     },
     "Data Science": {
         "news": [
@@ -86,9 +74,6 @@ SEARCH_QUERIES = {
             "big data engineering visualization news",
         ],
         "hackathons": ["data science analytics Kaggle hackathon 2026"],
-        "internships": ["data scientist analytics intern 2026"],
-        "events": ["data science analytics conference 2026"],
-        "workshops": ["Python data science pandas workshop 2026"],
     },
 }
 

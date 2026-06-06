@@ -186,7 +186,7 @@ class DatabaseFacade:
             
         return rows
 
-    def update_intelligence(self, item_id, score, tags, generated_summary=None):
+    def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None):
         """Update item after LLM evaluation."""
         with db_conn.get_cursor() as cur:
             # Fetch current data to preserve other fields
@@ -200,6 +200,8 @@ class DatabaseFacade:
             # Store LLM-generated summary if available (Bug 7 fix)
             if generated_summary:
                 data['summary'] = generated_summary
+            if category:
+                data['category'] = category
             
             status = 'processed' if score > 0 else 'irrelevant'
             
@@ -213,12 +215,21 @@ class DatabaseFacade:
 
     def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5):
         """Fetches top-scored opportunities for a specific IG and Category."""
-        query = """
-            SELECT * FROM scraped_data
-            WHERE status = 'processed'
-            AND ig = %s
-            AND (data->>'category' = %s OR data->>'category' IS NULL)
-        """
+        # For News: include uncategorized items (old data). For Hackathons: strict match only.
+        if category == "News":
+            query = """
+                SELECT * FROM scraped_data
+                WHERE status = 'processed'
+                AND ig = %s
+                AND (data->>'category' = %s OR data->>'category' IS NULL)
+            """
+        else:
+            query = """
+                SELECT * FROM scraped_data
+                WHERE status = 'processed'
+                AND ig = %s
+                AND data->>'category' = %s
+            """
         params = [ig, category]
         query, params = self._append_orchestrator_time_filter(query, params, column="scraped_at")
         query += """
