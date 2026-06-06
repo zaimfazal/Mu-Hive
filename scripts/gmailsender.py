@@ -58,8 +58,13 @@ def run_email_agent():
 
             # 2. Fetch structured events for this specific IG that haven't been emailed yet
             # ORDER BY category groups all events of the same category together
-            cursor.execute(
-                "SELECT id, category, summary, apply_link FROM events WHERE ig = %s AND mail_sent = FALSE ORDER BY category ASC",
+            cursor.execute(  """
+                SELECT id, category, summary, apply_link
+                FROM events
+                WHERE LOWER(ig) = LOWER(%s)
+                    AND mail_sent = FALSE
+                ORDER BY category ASC
+                """,
                 (ig,)
             )
             events = cursor.fetchall()
