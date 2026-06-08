@@ -81,5 +81,6 @@ SOURCE_PRIORITY = {
     "Tavily": 0,        # Tavily search — moderate trust
     "DuckDuckGo": 0,    # DuckDuckGo search — no boost
     "API": 1,           # Hackathon APIs — direct source
+    "Firecrawl": 1,     # Firecrawl scraped — direct source
 }
 

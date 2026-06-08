@@ -239,7 +239,7 @@ async def run_intelligence(batch_limit=15):
             item_id = doc["_id"]
             title = doc.get("title", "")
             # Use full extracted text if available; otherwise fallback to summary
-            content = doc.get("scraped_full_text") or doc.get("summary", "")
+            content = doc.get("scraped_full_text") or doc.get("summary") or ""
             category = doc.get("category", "Unknown")
             source_ig = doc.get("ig_tags", [])
 

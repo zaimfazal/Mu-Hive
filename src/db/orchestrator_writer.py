@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 
 DEFAULT_QUALITY_SCORE = 7
 IG_NORMALIZATION = {
-    "Ai": "AI",
-    "Ui Ux": "UI/UX",
+    # "Ai" and "Ui Ux" are no longer needed — constants.py now uses "AI" and "UI/UX" directly.
 }
 
 

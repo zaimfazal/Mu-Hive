@@ -72,11 +72,11 @@ MASTER_IGS: list[str] = [
     "No Or Low Code",
     "Entrepreneurship",
     "Ar Vr Mr",
-    "Ui Ux",
+    "UI/UX",
     "Mobile Development",
     "Data Analytics",
     "Space",
-    "Ai",
+    "AI",
     "Comics",
     "Digital Marketing",
     "MuV",
@@ -109,7 +109,7 @@ IG_KEYWORDS: dict[str, list[str]] = {
         "http", "web development", "frontend developer", "backend developer"
     ],
 
-    "Ai": [
+    "AI": [
         "artificial intelligence", " ai ",
         "ai challenge", "neural network", "deep learning",
         "computer vision", "ai agent", "autonomous ai",
@@ -188,7 +188,7 @@ IG_KEYWORDS: dict[str, list[str]] = {
         "game build", "game challenge", "gamejam"
     ],
 
-    "Ui Ux": [
+    "UI/UX": [
         "ui", "ux", "ui/ux", "figma", "wireframe",
         "prototype", "design thinking", "user experience",
         "interface design", "designathon", "crowdera",
@@ -382,18 +382,18 @@ IG_KEYWORDS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 RELATED_IGS: dict[str, list[str]] = {
-    "Ai": ["Generative AI", "Data Science", "Web Development"],
-    "Generative AI": ["Ai", "Data Science", "Creative Design"],
-    "Data Science": ["Data Analytics", "Ai", "Data Structures and Algorithm"],
-    "Data Analytics": ["Data Science", "Ai", "Data Structures and Algorithm"],
+    "AI": ["Generative AI", "Data Science", "Web Development"],
+    "Generative AI": ["AI", "Data Science", "Creative Design"],
+    "Data Science": ["Data Analytics", "AI", "Data Structures and Algorithm"],
+    "Data Analytics": ["Data Science", "AI", "Data Structures and Algorithm"],
     "Data Structures and Algorithm": ["Data Science", "Cyber Security", "General Tech"],
     "Cyber Security": ["Data Structures and Algorithm", "Devops", "General Tech"],
     "Blockchain": ["Web Development", "Cyber Security", "Devops"],
     "Game Dev": ["Creative Design", "Mobile Development", "Ar Vr Mr"],
-    "Ui Ux": ["Creative Design", "Web Development", "Mobile Development"],
+    "UI/UX": ["Creative Design", "Web Development", "Mobile Development"],
     "Ar Vr Mr": ["Game Dev", "Creative Design", "Mobile Development"],
     "Internet Of Things (IOT) And Robotics": ["Space", "Devops", "Cyber Security"],
-    "Mobile Development": ["Web Development", "Ui Ux", "Game Dev"],
+    "Mobile Development": ["Web Development", "UI/UX", "Game Dev"],
     "Devops": ["Web Development", "Cyber Security", "General Tech"],
     "Project Management": ["Product Management", "Strategic Leadership", "Entrepreneurship"],
     "Product Management": ["Project Management", "Entrepreneurship", "Digital Marketing"],
@@ -404,14 +404,14 @@ RELATED_IGS: dict[str, list[str]] = {
     "Strategic Leadership": ["Project Management", "Entrepreneurship", "General Tech"],
     "Civil": ["Space", "Internet Of Things (IOT) And Robotics", "General Tech"],
     "Quality Assurance": ["Devops", "Data Structures and Algorithm", "General Tech"],
-    "Comics": ["Creative Design", "Ui Ux", "General Tech"],
-    "Space": ["Internet Of Things (IOT) And Robotics", "Ai", "General Tech"],
-    "Quantum Computing": ["Ai", "Data Science", "General Tech"],
-    "Creative Design": ["Ui Ux", "Game Dev", "Comics"],
+    "Comics": ["Creative Design", "UI/UX", "General Tech"],
+    "Space": ["Internet Of Things (IOT) And Robotics", "AI", "General Tech"],
+    "Quantum Computing": ["AI", "Data Science", "General Tech"],
+    "Creative Design": ["UI/UX", "Game Dev", "Comics"],
     "Beckn": ["Web Development", "Devops", "General Tech"],
-    "Web Development": ["Mobile Development", "Ui Ux", "General Tech"],
+    "Web Development": ["Mobile Development", "UI/UX", "General Tech"],
     "General Tech": [],
-    "MuV": ["Creative Design", "Comics", "Ui Ux"],
+    "MuV": ["Creative Design", "Comics", "UI/UX"],
 }
 
 # ---------------------------------------------------------------------------

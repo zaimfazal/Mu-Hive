@@ -1,37 +1,59 @@
-from firecrawl import FirecrawlApp
+import os
+import logging
+from firecrawl import Firecrawl
 from src.config.settings import FIRECRAWL_API_KEY
 
-def firecrawl_scraper(url: str, mode: str = 'scrape', options: dict = None):
-    """
-    Standalone function to scrape or crawl a URL using Firecrawl.
-    Handles serialization of the result automatically.
-    """
-    if options is None:
-        options = {}
+logger = logging.getLogger(__name__)
 
-    if not FIRECRAWL_API_KEY:
-        raise ValueError("Firecrawl API key not found.")
+# Run-level call counter to keep track of Firecrawl API usage
+_calls_made = 0
 
-    app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+async def firecrawl_extract(url: str):
+    """
+    Scrapes a URL using the Firecrawl API.
+    Returns (markdown, title, description, images) if successful, or (None, None, None, None).
+    """
+    global _calls_made
     
-    # Execute scrape/crawl
-    if mode == 'crawl':
-        result = app.crawl(url, scrape_options=options)
-    else:
-        # Handle both old and new firecrawl-py versions
-        if hasattr(app, 'scrape_url'):
-            result = app.scrape_url(url, params=options)
-        else:
-            result = app.scrape(url, **options)
-
-    # Handle object serialization (converting Firecrawl response objects to dicts)
-    if hasattr(result, 'model_dump'):
-        serializable_result = result.model_dump()
-    elif hasattr(result, 'dict'):
-        serializable_result = result.dict()
-    elif hasattr(result, '__dict__'):
-        serializable_result = result.__dict__
-    else:
-        serializable_result = result
-
-    return serializable_result
+    # Import settings dynamically to allow for runtime changes
+    from src.config.settings import FIRECRAWL_ENABLED, FIRECRAWL_MAX_PER_RUN
+    
+    if not FIRECRAWL_ENABLED:
+        logger.info("Firecrawl: Skipped (disabled in settings)")
+        return None, None, None, None
+        
+    if not FIRECRAWL_API_KEY:
+        logger.warning("Firecrawl: Missing API key")
+        return None, None, None, None
+        
+    if _calls_made >= FIRECRAWL_MAX_PER_RUN:
+        logger.warning("Firecrawl: Skipped (reached max budget of %d per run)", FIRECRAWL_MAX_PER_RUN)
+        return None, None, None, None
+        
+    _calls_made += 1
+    logger.info("Firecrawl: Scraping page (call %d/%d) - %s", _calls_made, FIRECRAWL_MAX_PER_RUN, url)
+    
+    try:
+        # Firecrawl v2 uses the Firecrawl class
+        app = Firecrawl(api_key=FIRECRAWL_API_KEY)
+        
+        # Call scrape_url with format set to markdown
+        response = app.scrape_url(url, params={"formats": ["markdown"]})
+        
+        if not response:
+            return None, None, None, None
+            
+        # Extract fields from the response
+        metadata = response.get("metadata", {})
+        markdown = response.get("markdown", "")
+        title = metadata.get("title", "")
+        description = metadata.get("description", "")
+        
+        # Extract top image if available
+        og_image = metadata.get("ogImage", "")
+        images = [og_image] if og_image else []
+        
+        return markdown, title, description, images
+    except Exception as e:
+        logger.error("Firecrawl: Scrape failed for %s: %s", url, e)
+        return None, None, None, None

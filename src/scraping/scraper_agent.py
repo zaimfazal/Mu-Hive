@@ -117,17 +117,26 @@ async def l2_playwright(url: str, browser) -> tuple | None:
         logger.info(f"    [L2:{url[:50]}] {e}"); return None
  
  
+from src.scraping.firecrawl_tool import firecrawl_extract
+
 # ── Core scraping logic with structured output ────────────────────────────────────────────────────
 async def scrape_url(url: str, browser=None) -> dict | None:
     """
     Scrape a URL, returning full text.
     Returns dict with keys: text, page_title, meta_description, layer
-    or None if both layers fail.
+    or None if all layers fail.
     """
     logger.info(f"  [L1:{url[:50]}] trying...")
     result = await l1_httpx(url)
     label = "L1"
     
+    if not result:
+        logger.info(f"  [Firecrawl:{url[:50]}] trying...")
+        fc_text, fc_title, fc_desc, fc_imgs = await firecrawl_extract(url)
+        if fc_text and len(fc_text.split()) >= MIN_WORDS:
+            result = (fc_text, fc_title, fc_desc, fc_imgs[:MAX_IMAGES])
+            label = "Firecrawl"
+            
     if not result:
         logger.info(f"  [L2:{url[:50]}] trying...")
         if browser:
@@ -144,7 +153,7 @@ async def scrape_url(url: str, browser=None) -> dict | None:
         logger.info(f"  [{label}:{url[:50]}] ✓ {len(text.split())} words")
         return {"text": text, "page_title": title, "meta_description": meta, "layer": label}
 
-    logger.info(f"  [FAIL:{url[:50]}] both layers failed")
+    logger.info(f"  [FAIL:{url[:50]}] all layers failed")
     return None
  
  
