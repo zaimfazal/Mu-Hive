@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from src.db.postgres_database import DatabaseFacade
 from src.db.connection import db_conn
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_QUALITY_SCORE = 7
@@ -119,16 +122,24 @@ def _upsert_event_without_constraint(
         return cur.fetchone()[0]
 
 
-def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
+async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
     """
     Persist orchestrator hackathon output into the same Postgres DB used by
     Zulip and Gmail sender scripts.
+
+    Hackathons from the API already have structured metadata, so we generate
+    summaries directly here (no scraping needed) and mark them as processed.
     """
+    import asyncio
+    from src.agents.summarizer import summarizer_agent
+
     db = DatabaseFacade()
     _ensure_events_schema()
     inserted_scraped = 0
     upserted_events = 0
 
+    # Flatten all events with their metadata first
+    event_batch = []
     for ig, events in (grouped_events or {}).items():
         normalized_ig = _normalize_ig(ig)
         for raw_event in events:
@@ -137,39 +148,76 @@ def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
             link = str(event.get("registrationLink", "")).strip()
             if not link:
                 continue
+            event_batch.append({
+                "title": title,
+                "link": link,
+                "ig": normalized_ig,
+                "platform": event.get("platform", None),
+                "location": event.get("location", None),
+                "days_left": event.get("days_remaining", None),
+                "start_date": event.get("startDate", None),
+            })
 
-            # Extract metadata into dedicated columns
-            platform = event.get("platform", None)
-            location = event.get("location", None)
-            days_left = event.get("days_remaining", None)
-            source_engine = platform or "API"
+    if not event_batch:
+        db.close()
+        return {"inserted_scraped": 0, "upserted_events": 0}
 
-            # Summary is left NULL here — it will be populated later
-            # by the Intelligence Agent (Groq) in Phase 2.
-            inserted = db.insert_opportunity(
-                title=title,
-                link=link,
-                summary=None,
-                source_engine=source_engine,
-                ig_tags=[normalized_ig],
-                category="Hackathons",
-                is_processed=False,
-                quality_score=DEFAULT_QUALITY_SCORE,
-            )
-            if inserted:
-                inserted_scraped += 1
+    # ── Generate summaries concurrently (3 at a time to respect rate limits) ──
+    semaphore = asyncio.Semaphore(2)
+    summaries: dict[str, str | None] = {}
 
-            _upsert_event_without_constraint(
-                title=title,
-                ig=normalized_ig,
-                summary=None,
-                apply_link=link,
-                validity_score=DEFAULT_QUALITY_SCORE,
-                platform=platform,
-                location=location,
-                days_left=days_left,
-            )
-            upserted_events += 1
+    async def _summarize(ev: dict):
+        async with semaphore:
+            try:
+                prompt = (
+                    f"Title: {ev['title']}\n"
+                    f"Category: Hackathons\n"
+                    f"Interest Group: {ev['ig']}\n"
+                    f"Platform: {ev['platform'] or 'N/A'}\n"
+                    f"Location: {ev['location'] or 'Online'}\n"
+                    f"Start Date: {ev['start_date'] or 'TBA'}\n"
+                    f"Days Left: {ev['days_left'] or 'N/A'}\n\n"
+                    "Write a crisp 1-sentence summary."
+                )
+                result = await summarizer_agent.run(prompt)
+                summaries[ev['link']] = result.output.summary
+            except Exception as e:
+                logger.warning(f"Summarizer failed for '{ev['title']}': {e}")
+                summaries[ev['link']] = None
+
+    logger.info(f"Generating summaries for {len(event_batch)} hackathons...")
+    await asyncio.gather(*[_summarize(ev) for ev in event_batch])
+    logger.info(f"Summaries done. {sum(1 for v in summaries.values() if v)} succeeded.")
+
+    # ── Save everything to DB ──
+    for ev in event_batch:
+        summary = summaries.get(ev['link'])
+        source_engine = ev['platform'] or "API"
+
+        inserted = db.insert_opportunity(
+            title=ev['title'],
+            link=ev['link'],
+            summary=summary,
+            source_engine=source_engine,
+            ig_tags=[ev['ig']],
+            category="Hackathons",
+            is_processed=True,
+            quality_score=DEFAULT_QUALITY_SCORE,
+        )
+        if inserted:
+            inserted_scraped += 1
+
+        _upsert_event_without_constraint(
+            title=ev['title'],
+            ig=ev['ig'],
+            summary=summary,
+            apply_link=ev['link'],
+            validity_score=DEFAULT_QUALITY_SCORE,
+            platform=ev['platform'],
+            location=ev['location'],
+            days_left=ev['days_left'],
+        )
+        upserted_events += 1
 
     db.close()
     return {

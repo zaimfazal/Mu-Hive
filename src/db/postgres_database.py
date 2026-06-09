@@ -176,6 +176,7 @@ class DatabaseFacade:
         # Adapt for MongoDB-style access in intelligence.py
         for row in rows:
             row['_id'] = row['id']
+            row['link'] = row['url']
             # Flatten some fields from JSONB for easier access
             json_data = row.get('data') or {}
             row['summary'] = json_data.get('summary')

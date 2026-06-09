@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from src.scraping.scraper import run_scraper_pipeline 
-from src.scraping.scraper_agent import run_rss_agent
+from src.scraping.scraper_agent import run_rss_agent, run_scraper_agent
 from src.agents.intelligence import run_intelligence, LLMFailureThresholdExceeded
 from src.agents.communicator import run_communicator
 from src.db.orchestrator_writer import save_orchestrator_events
@@ -24,12 +24,16 @@ async def run_pipeline():
         logger.info("Phase 1: Running Scout Agent (Search & Scraping)...")
         await run_rss_agent()
         grouped_events = await run_scraper_pipeline()
-        save_result = await asyncio.to_thread(save_orchestrator_events, grouped_events)
+        save_result = await save_orchestrator_events(grouped_events)
         logger.info(
             "Saved orchestrator output to DB: %s scraped entries, %s event rows.",
             save_result["inserted_scraped"],
             save_result["upserted_events"],
         )
+        
+        # Scrape details for newly added hackathons (which have status 'not processed')
+        logger.info("Running Scraper Agent to process pending event links...")
+        await run_scraper_agent()
     except Exception as e:
         logger.error(f"Scout Agent failed: {e}. Continuing with existing data...")
 

@@ -230,7 +230,7 @@ DEVPOST_API = "https://devpost.com/api/hackathons"
 HACKEREARTH_API = "https://www.hackerearth.com/api/events/upcoming/"
 
 
-def normalize_event(name, platform, link, start, end, tags, location="", prize="", cost="", elig=""):
+def normalize_event(name, platform, link, start, end, tags, location="", prize="", cost="", elig="", description=""):
     """Normalize a hackathon event, extracting tag names from dict-style tags."""
     cleaned_tags = []
     if isinstance(tags, list):
@@ -259,7 +259,8 @@ def normalize_event(name, platform, link, start, end, tags, location="", prize="
         "location": str(location).strip() if location else "Online",
         "prizePool": prize if prize else "",
         "cost": str(cost).strip() if cost else "Free",
-        "eligibility": str(elig).strip() if elig else "Students"
+        "eligibility": str(elig).strip() if elig else "Students",
+        "description": str(description).strip() if description else ""
     }
 
 
@@ -285,8 +286,13 @@ async def fetch_devfolio_page(session, semaphore, offset):
                             tags = src.get("themes", [])
                             loc = "Online" if src.get(
                                 "is_online") else "In-Person"
+                            # Extract tagline/desc
+                            desc_val = src.get("tagline") or src.get("desc") or ""
+                            desc_val = clean_html(desc_val).strip()
+                            if len(desc_val) > 250:
+                                desc_val = desc_val[:247] + "..."
                             events.append(normalize_event(
-                                name, "Devfolio", link, start, end, tags, loc, "TBA", "Free", "Students"))
+                                name, "Devfolio", link, start, end, tags, loc, "TBA", "Free", "Students", description=desc_val))
                         except Exception:
                             continue
         except Exception as e:
@@ -339,8 +345,11 @@ async def fetch_unstop_page(session, semaphore, page):
                                 filters, list) else []
                             cost = "Paid" if item.get(
                                 "payment_type") == "paid" else "Free"
+                            desc_val = clean_html(item.get("details", "")).strip()
+                            if len(desc_val) > 250:
+                                desc_val = desc_val[:247] + "..."
                             events.append(normalize_event(
-                                name, "Unstop", link, start, end, tags, "Virtual/Online", "TBA", cost, "Students/College"))
+                                name, "Unstop", link, start, end, tags, "Virtual/Online", "TBA", cost, "Students/College", description=desc_val))
                         except Exception:
                             continue
         except Exception:
@@ -439,8 +448,11 @@ async def fetch_hackerearth_page(session, semaphore, page):
                             end = item.get("end_utc_tz", "TBA")
                             tags = item.get("tags", [])
                             loc = item.get("location", "Online")
+                            desc_val = clean_html(item.get("description", "")).strip()
+                            if len(desc_val) > 250:
+                                desc_val = desc_val[:247] + "..."
                             events.append(normalize_event(
-                                name, "HackerEarth", link, start, end, tags, loc, "TBA", "Free", "Open"))
+                                name, "HackerEarth", link, start, end, tags, loc, "TBA", "Free", "Open", description=desc_val))
                         except Exception:
                             continue
         except Exception:
@@ -616,6 +628,9 @@ async def run_hackathon_apis(db: Database):
             f"Eligibility: {ev['eligibility']}\n"
             f"Tags: {', '.join(ev['tags'])}"
         )
+        desc = ev.get("description", "").strip()
+        if desc:
+            summary += f"\nDescription: {desc}"
         ig_tags = map_hackathon_tags(ev['tags'])
 
         # Only insert if there is at least one mapped IG

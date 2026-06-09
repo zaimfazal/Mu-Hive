@@ -59,7 +59,7 @@ def build_digest_body(items: list, is_news: bool = False) -> str:
         link = item.get('url', '')
         # Data is stored in the 'data' JSONB column in Postgres
         json_data = item.get('data') or {}
-        summary = json_data.get('summary', 'No summary available.')
+        summary = item.get('summary') or json_data.get('summary') or 'No summary available.'
         
         fmt = f"* **{title}**\n  *Summary*: {summary}\n  *Link*: [Read More]({link})\n"
         
@@ -93,7 +93,7 @@ async def run_zulip_notifications():
 
         # Read from Database (Assuming Intelligence Agent has already processed them)
         news_items = db.get_top_opportunities_by_ig_and_category(ig_name, "News", limit=5)
-        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathon", limit=5)
+        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathons", limit=5)
         
         if not news_items and not hack_items:
             logger.info(f"ℹ️ No new items found in DB for {ig_name}.")
