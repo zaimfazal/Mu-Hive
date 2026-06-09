@@ -41,7 +41,7 @@ def _ensure_events_schema() -> None:
                 ig TEXT,
                 category TEXT,
                 summary TEXT,
-                apply_link TEXT,
+                apply_link TEXT UNIQUE,
                 validity_score INTEGER,
                 platform TEXT,
                 location TEXT,
@@ -68,6 +68,18 @@ def _ensure_events_schema() -> None:
         cur.execute(
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;"
         )
+        # Ensure UNIQUE constraint exists even if table was created without it
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'events_apply_link_key'
+                ) THEN
+                    ALTER TABLE events ADD CONSTRAINT events_apply_link_key UNIQUE (apply_link);
+                END IF;
+            END $$;
+        """)
 
 
 def _upsert_event_without_constraint(
@@ -138,86 +150,80 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
     inserted_scraped = 0
     upserted_events = 0
 
-    # Flatten all events with their metadata first
-    event_batch = []
+    from src.utils.ig_normalizer import normalize_ig
+
     for ig, events in (grouped_events or {}).items():
-        normalized_ig = _normalize_ig(ig)
+        normalized_ig = normalize_ig(ig)
+        if normalized_ig is None or normalized_ig.strip().lower() == "unknown":
+            logger.warning(f"Skipping group: invalid IG '{ig}'")
+            continue
         for raw_event in events:
             event = _to_plain_event(raw_event)
             title = str(event.get("eventName", "Unknown")).strip()
             link = str(event.get("registrationLink", "")).strip()
             if not link:
                 continue
-            event_batch.append({
-                "title": title,
-                "link": link,
-                "ig": normalized_ig,
-                "platform": event.get("platform", None),
-                "location": event.get("location", None),
-                "days_left": event.get("days_remaining", None),
-                "start_date": event.get("startDate", None),
-            })
 
-    if not event_batch:
-        db.close()
-        return {"inserted_scraped": 0, "upserted_events": 0}
+            # Extract metadata into dedicated columns
+            platform = event.get("platform", None)
+            location = event.get("location", None)
+            days_left = event.get("days_remaining", None)
+            start_date = event.get("startDate", None)
+            source_engine = platform or "API"
 
-    # ── Generate summaries concurrently (3 at a time to respect rate limits) ──
-    semaphore = asyncio.Semaphore(2)
-    summaries: dict[str, str | None] = {}
-
-    async def _summarize(ev: dict):
-        async with semaphore:
+            # ── Generate summary from structured API metadata ──
+            summary = None
             try:
-                prompt = (
-                    f"Title: {ev['title']}\n"
+                summary_prompt = (
+                    f"Title: {title}\n"
                     f"Category: Hackathons\n"
-                    f"Interest Group: {ev['ig']}\n"
-                    f"Platform: {ev['platform'] or 'N/A'}\n"
-                    f"Location: {ev['location'] or 'Online'}\n"
-                    f"Start Date: {ev['start_date'] or 'TBA'}\n"
-                    f"Days Left: {ev['days_left'] or 'N/A'}\n\n"
+                    f"Interest Group: {normalized_ig}\n"
+                    f"Platform: {platform or 'N/A'}\n"
+                    f"Location: {location or 'Online'}\n"
+                    f"Start Date: {start_date or 'TBA'}\n"
+                    f"Days Left: {days_left or 'N/A'}\n\n"
                     "Write a crisp 1-sentence summary."
                 )
-                result = await summarizer_agent.run(prompt)
-                summaries[ev['link']] = result.output.summary
+                result = await summarizer_agent.run(summary_prompt)
+                summary = result.output.summary
             except Exception as e:
-                logger.warning(f"Summarizer failed for '{ev['title']}': {e}")
-                summaries[ev['link']] = None
+                logger.warning(f"Summarizer failed for '{title}': {e}")
 
-    logger.info(f"Generating summaries for {len(event_batch)} hackathons...")
-    await asyncio.gather(*[_summarize(ev) for ev in event_batch])
-    logger.info(f"Summaries done. {sum(1 for v in summaries.values() if v)} succeeded.")
+            try:
+                inserted = db.insert_opportunity(
+                    title=title,
+                    link=link,
+                    summary=summary,
+                    source_engine=source_engine,
+                    ig_tags=[normalized_ig],
+                    category="Hackathons",
+                    is_processed=True,
+                    quality_score=DEFAULT_QUALITY_SCORE,
+                )
+                _upsert_event_without_constraint(
+                    title=title,
+                    ig=normalized_ig,
+                    summary=summary,
+                    apply_link=link,
+                    validity_score=DEFAULT_QUALITY_SCORE,
+                    platform=platform,
+                    location=location,
+                    days_left=days_left,
+                )
+                if inserted:
+                    inserted_scraped += 1
+                upserted_events += 1
+            except Exception as e:
+                logger.error(f"Failed to save hackathon '{title}': {e}. Rolling back.")
+                with db_conn.get_cursor() as rollback_cur:
+                    rollback_cur.execute(
+                        "UPDATE scraped_data SET status = 'not processed' WHERE url = %s AND status = 'processed'",
+                        (link,)
+                    )
 
-    # ── Save everything to DB ──
-    for ev in event_batch:
-        summary = summaries.get(ev['link'])
-        source_engine = ev['platform'] or "API"
-
-        inserted = db.insert_opportunity(
-            title=ev['title'],
-            link=ev['link'],
-            summary=summary,
-            source_engine=source_engine,
-            ig_tags=[ev['ig']],
-            category="Hackathons",
-            is_processed=True,
-            quality_score=DEFAULT_QUALITY_SCORE,
-        )
-        if inserted:
-            inserted_scraped += 1
-
-        _upsert_event_without_constraint(
-            title=ev['title'],
-            ig=ev['ig'],
-            summary=summary,
-            apply_link=ev['link'],
-            validity_score=DEFAULT_QUALITY_SCORE,
-            platform=ev['platform'],
-            location=ev['location'],
-            days_left=ev['days_left'],
-        )
-        upserted_events += 1
+            # Throttle to avoid rate limits
+            if summary:
+                await asyncio.sleep(1)
 
     db.close()
     return {

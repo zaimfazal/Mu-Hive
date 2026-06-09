@@ -48,9 +48,11 @@ class ScrapeRepository:
             cur.execute("""
                 INSERT INTO scraped_data (title, url, ig, source, status, data)
                 VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url, ig) DO NOTHING
                 RETURNING id;
             """, (title, url, ig, source_engine, status, json.dumps(data)))
-            return cur.fetchone()[0]
+            row = cur.fetchone()
+            return row[0] if row else None
 
     @staticmethod
     def find_pending(limit=50):

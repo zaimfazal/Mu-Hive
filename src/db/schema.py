@@ -15,7 +15,8 @@ def initialize_schema():
                     status TEXT,
                     scrape_layer TEXT,
                     scraped_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    data JSONB
+                    data JSONB,
+                    zulip_sent BOOLEAN DEFAULT FALSE
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -40,6 +41,9 @@ def initialize_schema():
                     email TEXT NOT NULL
                 );
             """)
+            
+            cur.execute("ALTER TABLE scraped_data ADD COLUMN IF NOT EXISTS zulip_sent BOOLEAN DEFAULT FALSE;")
+            cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mail_sent BOOLEAN DEFAULT FALSE;")
 
 
         print("[+] Schema initialization complete.")

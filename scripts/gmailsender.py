@@ -33,86 +33,107 @@ def send_email(subject, body, receiver):
 def run_email_agent():
     logger.info("Email Agent starting...")
     
-    # We fetch the exact Supabase string you placed in .env
-    db_url = os.getenv("DATABASE_URL") 
-    
+    # Database connection
+    db_url = os.getenv("DATABASE_URL")
     if not db_url:
         logger.warning("DATABASE_URL not found in .env. Checking local defaults...")
         db_url = "dbname=mu_hive user=postgres password=postgres host=localhost"
-
+    
     try:
         conn = psycopg2.connect(db_url)
         conn.autocommit = True
         cursor = conn.cursor(cursor_factory=DictCursor)
         
-        # 1. Fetch the IG to Email mappings right out of Postgres
+        # Fetch IG to email mappings
         cursor.execute("SELECT ig, email FROM ig_mails")
         ig_email_records = cursor.fetchall()
-
+        
         if not ig_email_records:
             logger.info("No email mappings found in the 'ig_mails' table.")
-
+            return
+        
         for record in ig_email_records:
-            ig = record['ig']
+            raw_ig = record['ig']
             email = record['email']
-
-            # 2. Fetch structured events for this specific IG that haven't been emailed yet
-            # ORDER BY category groups all events of the same category together
-            cursor.execute(  """
-                SELECT id, category, summary, apply_link
+            
+            from src.utils.ig_normalizer import normalize_ig
+            ig = normalize_ig(raw_ig)
+            if not ig:
+                logger.warning(f"Invalid IG mapping in ig_mails: '{raw_ig}'")
+                continue
+            
+            # Fetch unsent events for this IG, including platform & location
+            cursor.execute(
+                """
+                SELECT id, category, summary, apply_link, platform, location
                 FROM events
-                WHERE LOWER(ig) = LOWER(%s)
+                WHERE ig = %s
                     AND mail_sent = FALSE
                 ORDER BY category ASC
                 """,
                 (ig,)
             )
             events = cursor.fetchall()
-
+            
             if not events:
                 logger.info("[%s] No events, skipping.", ig)
                 continue
-
-            # Join formatted HTML strings together
+            
+            # Build email body, grouping by category
             body_parts = []
+            current_category = None
             for e in events:
                 cat = str(e['category'] or "General").strip()
+                if cat != current_category:
+                    # start a new section
+                    body_parts.append(f"<h2>{cat}</h2>")
+                    current_category = cat
                 summ = str(e['summary'] or "No summary provided.").replace("\n", "<br>").strip()
                 link = str(e['apply_link'] or "No link available.").strip()
-                
+                link_label = "Apply link"
+                if cat.lower() == "hackathons":
+                    platform = str(e['platform'] or "").strip()
+                    location = str(e['location'] or "").strip()
+                    if platform:
+                        extra += f"<b>Platform:</b> {platform}<br>"
+                    if location:
+                        extra += f"<b>Location:</b> {location}<br>"
+                else:
+                    link_label = "Read more"
+
                 event_html = (
-                    f"<b>CATEGORY : {cat}</b><br><br>"
-                    f"{summ}<br><br>"
-                    f"Apply link: <a href='{link}'>{link}</a>"
+                    f"{extra}"
+                    f"{summ}<br>"
+                    f"{link_label}: <a href='{link}'>{link}</a><br><br>"
                 )
                 body_parts.append(event_html)
-
-            # Separate multiple events using a professional horizontal rule
-            body = "<br><hr><br>".join(body_parts)
-
-            # Send Email
+            
+            # Join sections with a horizontal rule
+            body = "<hr>".join(body_parts)
+            
+            # Send the email
             send_email(
                 subject=f"{ig.title()} Digest",
                 body=body,
-                receiver=email
+                receiver=email,
             )
-
-            # 3. Mark them as sent so we don't spam!
+            
+            # Mark events as sent
             event_ids = tuple([e['id'] for e in events])
             if event_ids:
                 cursor.execute(
                     "UPDATE events SET mail_sent = TRUE WHERE id IN %s",
                     (event_ids,)
                 )
-
+    
     except Exception as e:
         logger.error("Email Agent PostgreSQL error: %s", e)
     finally:
-        if 'cursor' in locals(): 
+        if 'cursor' in locals():
             cursor.close()
-        if 'conn' in locals(): 
+        if 'conn' in locals():
             conn.close()
-
+    
     logger.info("Email Agent done.")
 
 if __name__ == "__main__":

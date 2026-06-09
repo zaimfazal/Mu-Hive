@@ -8,17 +8,17 @@ from pydantic_ai import Agent
 import asyncio
 
 from src.db.postgres_database import DatabaseFacade as Database
-from src.config.agent_config import model
+from src.config.agent_config import model, shared_model_settings
 from src.config.logging_config import setup_logging
 from src.config.sources import SOURCE_PRIORITY
-from src.agents.planner import MVP_IGS
+from src.config.constants import MASTER_IGS
 from src.agents.summarizer import summarizer_agent
 
 logger = logging.getLogger(__name__)
 MAX_LLM_API_ERRORS_BEFORE_FAIL = 5
 HARD_FAIL_STATUS_CODES = {400, 429}
 
-_VALID_IGS = set(MVP_IGS)
+_VALID_IGS = set(MASTER_IGS)
 _IG_NORMALIZATION = {
     "ai": "AI",
     "data science": "Data Science",
@@ -43,7 +43,7 @@ class OpportunityIntelligence(BaseModel):
         description="A short 1-sentence explanation of the score."
     )
     ig_tags: List[str] = Field(
-        description=f"Select the most relevant Interest Groups from: {', '.join(MVP_IGS)}. Must select at least one if relevant."
+        description=f"Select the most relevant Interest Groups from: {', '.join(MASTER_IGS)}. Must select at least one if relevant."
     )
     category: str = Field(
         description="Must be exactly 'News' or 'Hackathons'. Use 'Hackathons' ONLY for actual upcoming hackathon/competition listings with registration links. Everything else (articles, tutorials, announcements, opinion pieces) is 'News'."
@@ -133,6 +133,7 @@ Score 1-4 (LOW PRIORITY):
 intelligence_agent = Agent(
     model,
     output_type=OpportunityIntelligence,
+    model_settings=shared_model_settings,
     system_prompt=INTELLIGENCE_SYSTEM_PROMPT,
 )
 
@@ -151,8 +152,9 @@ def _normalize_ig(tag: str) -> str | None:
 
 def _validate_tags(llm_tags: list, source_ig: list) -> list:
     """
-    Ensure final tags stay in supported IGs and always include source_ig tags
-    from the database.
+    Ensure final tags stay in supported IGs.
+    If the LLM returns any valid tags, use them exclusively.
+    Only use source_ig tags as a fallback if the LLM returns no valid tags.
     """
     validated = []
     seen = set()
@@ -163,12 +165,14 @@ def _validate_tags(llm_tags: list, source_ig: list) -> list:
             validated.append(normalized)
             seen.add(normalized)
 
-    for tag in source_ig or []:
-        normalized = _normalize_ig(tag)
-        if normalized and normalized not in seen:
-            logger.info("  -> Added source IG tag '%s' to model tags", normalized)
-            validated.append(normalized)
-            seen.add(normalized)
+    # Only fall back to source_ig if the LLM returned nothing valid
+    if not validated:
+        for tag in source_ig or []:
+            normalized = _normalize_ig(tag)
+            if normalized and normalized not in seen:
+                logger.info("  -> Added source IG tag '%s' to model tags as fallback", normalized)
+                validated.append(normalized)
+                seen.add(normalized)
 
     return validated
 
@@ -276,11 +280,37 @@ async def run_intelligence(batch_limit=15):
                     except (ValueError, TypeError):
                         pass
 
-                # Final score: LLM score + source boost + recency, capped at 10
-                final_score = min(10, raw_score + source_boost + recency_bonus) if raw_score > 0 else 0
+                # Restructured scoring logic (only apply bonus if raw_score >= 6)
+                bonus = source_boost + recency_bonus
+                if raw_score == 0:
+                    final_score = 0
+                    score_breakdown = "0 (irrelevant)"
+                elif raw_score >= 6:
+                    final_score = min(10, raw_score + bonus)
+                    score_breakdown = f"{raw_score} + {bonus} bonus = {final_score}"
+                else:
+                    final_score = raw_score
+                    score_breakdown = f"{raw_score} (no bonus applied as raw score < 6)"
 
                 # Post-LLM validation to catch misclassifications
                 validated_tags = _validate_tags(intelligence.ig_tags, source_ig)
+                
+                from src.utils.ig_normalizer import normalize_ig
+                normalized_tags = []
+                for tag in validated_tags:
+                    canonical = normalize_ig(tag)
+                    if canonical:
+                        normalized_tags.append(canonical)
+                
+                validated_tags = normalized_tags
+                ig = validated_tags[0] if validated_tags else None
+                
+                if ig is None or ig.strip().lower() == "unknown":
+                    logger.warning(f"Skipping item {item_id}: invalid IG '{ig}'")
+                    db.update_intelligence(item_id, 0, [])
+                    processed_count += 1
+                    continue
+                
                 final_category = intelligence.category
 
                 generated_summary = None
@@ -300,7 +330,15 @@ async def run_intelligence(batch_limit=15):
                     except Exception as e:
                         logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
 
-                db.update_intelligence(item_id, final_score, validated_tags, generated_summary=generated_summary, category=final_category)
+                db.update_intelligence(
+                    item_id, 
+                    final_score, 
+                    validated_tags, 
+                    generated_summary=generated_summary, 
+                    category=final_category,
+                    raw_score=raw_score,
+                    score_breakdown=score_breakdown
+                )
 
                 # Sync the Groq-generated summary to the events table
                 if generated_summary:
@@ -309,7 +347,7 @@ async def run_intelligence(batch_limit=15):
                         db.update_event_summary_by_link(link, generated_summary)
                 processed_count += 1
                 logger.info(
-                    f"  -> Score: {raw_score} (LLM) + {source_boost} (source) + {recency_bonus} (recency) = {final_score} | "
+                    f"  -> Score: {score_breakdown} | "
                     f"Tags: {validated_tags} | Category: {final_category} | {intelligence.reasoning}"
                 )
 

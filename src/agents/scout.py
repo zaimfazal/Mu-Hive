@@ -18,8 +18,14 @@ import calendar
 from src.db.postgres_database import DatabaseFacade as Database
 from src.config.sources import ALL_RSS_FEEDS
 from src.config.logging_config import setup_logging
+from src.db.connection import db_conn
 
 logger = logging.getLogger(__name__)
+
+def is_already_scraped(url: str, ig: str, conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM scraped_data WHERE url = %s AND ig = %s LIMIT 1", (url, ig))
+        return cur.fetchone() is not None
 
 # --- Config for Scraper ---
 MIN_WORDS = 120
@@ -137,6 +143,11 @@ def run_rss_scout(db: Database):
                         summary_raw = entry.content[0].value
                     summary = clean_html(summary_raw)
 
+                    conn = db_conn.get_connection()
+                    if is_already_scraped(link, ig, conn):
+                        logger.info(f"  [Skip] Already in DB: {link} for IG: {ig}")
+                        continue
+
                     if db.insert_opportunity(title, link, summary, source_engine="RSS", ig_tags=[ig], category="News"):
                         new_count += 1
             except Exception as e:
@@ -194,6 +205,10 @@ def run_search_agent(db: Database):
                         # Extract summary/snippet from search results
                         summary = result.get('body', result.get(
                             'content', result.get('snippet', '')))
+                        conn = db_conn.get_connection()
+                        if is_already_scraped(link, ig, conn):
+                            logger.info(f"  [Skip] Already in DB: {link} for IG: {ig}")
+                            continue
                         if db.insert_opportunity(title, link, summary=summary, source_engine=source, ig_tags=[ig], category=category.capitalize()):
                             new_count += 1
                 except Exception as e:
@@ -635,6 +650,11 @@ async def run_hackathon_apis(db: Database):
 
         # Only insert if there is at least one mapped IG
         if ig_tags:
+            conn = db_conn.get_connection()
+            primary_ig = ig_tags[0] if ig_tags else "Unknown"
+            if is_already_scraped(ev['registrationLink'], primary_ig, conn):
+                logger.info(f"  [Skip] Already in DB: {ev['registrationLink']} for IG: {primary_ig}")
+                continue
             score = _compute_tag_confidence_score(ig_tags, ev['tags'])
             if db.insert_opportunity(ev['eventName'], ev['registrationLink'], summary, source_engine=ev['platform'], ig_tags=ig_tags, category="Hackathons", is_processed=True, quality_score=score):
                 new_count += 1

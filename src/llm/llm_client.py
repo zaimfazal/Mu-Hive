@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import warnings
 from typing import List, Dict, Any, Type, Optional
 from loguru import logger
 from openai import OpenAI
@@ -8,6 +9,12 @@ from aiolimiter import AsyncLimiter
 from dotenv import load_dotenv
 from src.config import load_config
 from src.utils.circuit_breaker import mark_failure, is_cooled_down
+
+warnings.warn(
+    "llm_client.py is deprecated and will be removed in a future release. Use the unified Pydantic AI agent framework.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 # Load env variables
 load_dotenv()

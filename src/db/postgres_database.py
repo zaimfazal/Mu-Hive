@@ -187,16 +187,22 @@ class DatabaseFacade:
             
         return rows
 
-    def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None):
+    def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None, raw_score=None, score_breakdown=None):
         """Update item after LLM evaluation."""
         with db_conn.get_cursor() as cur:
             # Fetch current data to preserve other fields
-            cur.execute("SELECT data FROM scraped_data WHERE id = %s", (item_id,))
+            cur.execute("SELECT title, url, source, data FROM scraped_data WHERE id = %s", (item_id,))
             row = cur.fetchone()
-            data = row[0] if row and row[0] else {}
+            if not row:
+                return False
+            title, url, source, data = row[0], row[1], row[2], (row[3] if row[3] else {})
             
             data['quality_score'] = score
             data['validated_tags'] = tags
+            if raw_score is not None:
+                data['raw_quality_score'] = raw_score
+            if score_breakdown is not None:
+                data['score_breakdown'] = score_breakdown
             
             # Store LLM-generated summary if available (Bug 7 fix)
             if generated_summary:
@@ -212,6 +218,47 @@ class DatabaseFacade:
                 WHERE id = %s
             """, (status, json.dumps(data), tags[0] if tags else 'Unknown', item_id))
             
+            if status == 'processed' and tags:
+                # Extract optional fields from scraped_data
+                platform_val = data.get('platform') or source or 'RSS'
+                location_val = data.get('location')
+                # Compute days_left / deadline if possible
+                days_left_val = None
+                if 'days_left' in data:
+                    days_left_val = data.get('days_left')
+                else:
+                    # Try to compute from startDate if present (ISO format)
+                    start_str = data.get('startDate')
+                    if start_str:
+                        try:
+                            from datetime import datetime, timezone
+                            start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00')).astimezone(timezone.utc)
+                            now = datetime.now(timezone.utc)
+                            delta = (start_dt - now).days
+                            days_left_val = max(delta, 0)
+                        except Exception:
+                            days_left_val = None
+                # Skip if event already exists (apply_link unique)
+                cur.execute("SELECT id FROM events WHERE apply_link = %s", (url,))
+                if not cur.fetchone():
+                    try:
+                        self.events.upsert({
+                            'title': title,
+                            'ig': tags[0],
+                            'category': category or 'News',
+                            'summary': generated_summary,
+                            'apply_link': url,
+                            'validity_score': score,
+                            'platform': platform_val,
+                            'location': location_val,
+                            'days_left': days_left_val,
+                        })
+                    except Exception as evt_err:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            "Events upsert failed for %s: %s", url, evt_err
+                        )
+            
             return cur.rowcount > 0
 
     def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5):
@@ -223,6 +270,7 @@ class DatabaseFacade:
                 WHERE status = 'processed'
                 AND ig = %s
                 AND (data->>'category' = %s OR data->>'category' IS NULL)
+                AND (zulip_sent = FALSE OR zulip_sent IS NULL)
             """
         else:
             query = """
@@ -230,6 +278,7 @@ class DatabaseFacade:
                 WHERE status = 'processed'
                 AND ig = %s
                 AND data->>'category' = %s
+                AND (zulip_sent = FALSE OR zulip_sent IS NULL)
             """
         params = [ig, category]
         query, params = self._append_orchestrator_time_filter(query, params, column="scraped_at")

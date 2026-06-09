@@ -246,13 +246,13 @@ async def run_rss_agent():
     async def process_rss_feed(feed_url, browser, ig_category):
         try:
             logger.info(f"Fetching RSS: {feed_url} [{ig_category}]")
-            # feedparser fetches natively — works for all feeds without httpx
-            feed = feedparser.parse(feed_url)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0,
+                                         headers={"User-Agent": USER_AGENT}) as client:
+                r = await client.get(feed_url)
+                r.raise_for_status()
+                feed_data = r.content
 
-            status = feed.get("status", 0)
-            if status >= 400:
-                logger.info(f"[RSS Error] {feed_url} -> HTTP {status}")
-                return
+            feed = feedparser.parse(feed_data)
 
             if not feed.entries:
                 logger.info(f"[RSS Skip] {feed_url} -> 0 entries returned")

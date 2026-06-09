@@ -1,10 +1,11 @@
+# scripts/verify_setup.py
 """
 Verify that the Mu-Hive environment is correctly configured before running the pipeline.
-Checks: Database connectivity, Groq API key presence.
+Checks: Database connectivity (Postgres), Groq API key presence.
 """
-import sqlite3
 import sys
 import os
+import psycopg2
 from dotenv import load_dotenv
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,23 +13,79 @@ load_dotenv(dotenv_path=os.path.join(ROOT_DIR, ".env"))
 
 
 def test_db():
-    """Verify the SQLite database exists and is readable."""
+    """Verify PostgreSQL connection and schema."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        print("[FAIL] DATABASE ERROR: DATABASE_URL not set in environment.")
+        return False
     try:
-        db_path = os.path.join(ROOT_DIR, "data", "mu_hive.db")
-        conn = sqlite3.connect(db_path)
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
         cursor = conn.cursor()
 
-        # Check if the opportunities table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='opportunities'")
-        if not cursor.fetchone():
-            print("[WARN] DATABASE: 'opportunities' table does not exist yet. Run 'python main.py' to initialize.")
+        # Check if scraped_data table exists
+        cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'scraped_data');")
+        scraped_data_exists = cursor.fetchone()[0]
+        if not scraped_data_exists:
+            print("[FAIL] DATABASE: 'scraped_data' table does not exist.")
             conn.close()
-            return True  # Not a failure — table gets created on first run
+            return False
 
-        count = cursor.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
-        unprocessed = cursor.execute("SELECT COUNT(*) FROM opportunities WHERE quality_score IS NULL").fetchone()[0]
+        # Check if events table exists
+        cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'events');")
+        events_exists = cursor.fetchone()[0]
+        if not events_exists:
+            print("[FAIL] DATABASE: 'events' table does not exist.")
+            conn.close()
+            return False
+
+        # Check if zulip_sent column exists in scraped_data
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'scraped_data' AND column_name = 'zulip_sent'
+            );
+        """)
+        zulip_sent_exists = cursor.fetchone()[0]
+        if not zulip_sent_exists:
+            print("[FAIL] DATABASE: 'zulip_sent' column does not exist in 'scraped_data'.")
+            conn.close()
+            return False
+
+        # Ensure that test data is generated for each of the 3 active IGs
+        # (AI, Cyber Security, Web Development) in the table ig_mails (default: test-email@gmail.com) if missing
+        active_igs = ["AI", "Cyber Security", "Web Development"]
+        
+        # Check if ig_mails table exists first
+        cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ig_mails');")
+        ig_mails_exists = cursor.fetchone()[0]
+        if not ig_mails_exists:
+            # Create if missing
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ig_mails (
+                    id SERIAL PRIMARY KEY,
+                    ig TEXT UNIQUE NOT NULL,
+                    email TEXT NOT NULL
+                );
+            """)
+        
+        for ig in active_igs:
+            cursor.execute("SELECT 1 FROM ig_mails WHERE ig = %s", (ig,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO ig_mails (ig, email) VALUES (%s, %s) ON CONFLICT (ig) DO NOTHING",
+                    (ig, "test-email@gmail.com")
+                )
+                print(f"[OK]   DATABASE: Inserted default mail mapping for IG: {ig}")
+
+        # Counts
+        cursor.execute("SELECT COUNT(*) FROM scraped_data")
+        scraped_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM events")
+        events_count = cursor.fetchone()[0]
+
         conn.close()
-        print(f"[OK]   DATABASE: {count} total opportunities, {unprocessed} awaiting evaluation.")
+        print(f"[OK]   DATABASE: Postgres connected. {scraped_count} scraped, {events_count} events.")
         return True
     except Exception as e:
         print(f"[FAIL] DATABASE ERROR: {e}")
@@ -47,7 +104,7 @@ def test_groq():
 
 if __name__ == '__main__':
     print("=" * 45)
-    print("  Mu-Hive Environment Verification")
+    print("  Mu-Hive Environment Verification (Postgres)")
     print("=" * 45)
 
     db_ok = test_db()
