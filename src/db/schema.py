@@ -31,6 +31,8 @@ def initialize_schema():
                     location TEXT,
                     days_left INTEGER,
                     mail_sent BOOLEAN DEFAULT FALSE,
+                    zulip_sent BOOLEAN DEFAULT FALSE,
+                    deadline TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
@@ -44,6 +46,9 @@ def initialize_schema():
             
             cur.execute("ALTER TABLE scraped_data ADD COLUMN IF NOT EXISTS zulip_sent BOOLEAN DEFAULT FALSE;")
             cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mail_sent BOOLEAN DEFAULT FALSE;")
+            cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS zulip_sent BOOLEAN DEFAULT FALSE;")
+            cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS deadline TEXT;")
+
 
 
         print("[+] Schema initialization complete.")

@@ -12,7 +12,6 @@ from src.config.agent_config import model, shared_model_settings
 from src.config.logging_config import setup_logging
 from src.config.sources import SOURCE_PRIORITY
 from src.config.constants import MASTER_IGS
-from src.agents.summarizer import summarizer_agent
 
 logger = logging.getLogger(__name__)
 MAX_LLM_API_ERRORS_BEFORE_FAIL = 5
@@ -51,6 +50,10 @@ class OpportunityIntelligence(BaseModel):
     structured_metadata: dict | None = Field(
         default=None,
         description="ONLY when category='Hackathons': extract available fields as {'Platform': '', 'Start': '', 'End': '', 'Location': '', 'Mode': 'Online/Offline/Hybrid', 'Prize Pool': '', 'Registration Link': '', 'Cost': '', 'Eligibility': ''}. For News, return null."
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Write a crisp 1-sentence summary of the article if it is relevant. Return null if is_relevant is False."
     )
 
     @field_validator("ig_tags")
@@ -313,22 +316,9 @@ async def run_intelligence(batch_limit=15):
                 
                 final_category = intelligence.category
 
-                generated_summary = None
-                if final_score >= 6:
-                    try:
-                        summary_prompt = (
-                            f"Title: {title}\n"
-                            f"Interest Groups: {', '.join(validated_tags)}\n"
-                            f"Category: {final_category}\n"
-                            f"Content: {content[:1500]}\n\n"
-                            "Write a crisp 1-sentence summary."
-                        )
-                        summary_result = await run_agent_with_retry(summarizer_agent, summary_prompt)
-                        generated_summary = summary_result.output.summary
-                        logger.info(f"  -> Summary: {generated_summary[:80]}...")
-                        await asyncio.sleep(1)
-                    except Exception as e:
-                        logger.warning(f"  -> Summarizer failed for ID {item_id}: {e}")
+                generated_summary = intelligence.summary if final_score >= 6 else None
+                if generated_summary:
+                    logger.info(f"  -> Summary: {generated_summary[:80]}...")
 
                 db.update_intelligence(
                     item_id, 
@@ -337,7 +327,8 @@ async def run_intelligence(batch_limit=15):
                     generated_summary=generated_summary, 
                     category=final_category,
                     raw_score=raw_score,
-                    score_breakdown=score_breakdown
+                    score_breakdown=score_breakdown,
+                    structured_metadata=intelligence.structured_metadata
                 )
 
                 # Sync the Groq-generated summary to the events table
@@ -351,7 +342,7 @@ async def run_intelligence(batch_limit=15):
                     f"Tags: {validated_tags} | Category: {final_category} | {intelligence.reasoning}"
                 )
 
-                await asyncio.sleep(3)
+                await asyncio.sleep(2.5)
             except Exception as e:
                 status_code = _extract_status_code(e)
                 if status_code in HARD_FAIL_STATUS_CODES:
@@ -369,8 +360,11 @@ async def run_intelligence(batch_limit=15):
                             f"{hard_fail_count} HTTP 400/429 errors in one run."
                         ) from e
 
-                logger.error(f"Intelligence processing failed for ID {item_id}: {e}")
-                db.update_intelligence(item_id, 0, [])
+                logger.error(f"Intelligence processing failed for ID {item_id}: {e}", exc_info=True)
+                try:
+                    db.update_intelligence(item_id, 0, [])
+                except Exception as update_err:
+                    logger.error(f"Failed to mark item {item_id} as failed in DB: {update_err}")
 
         logger.info(
             f"Intelligence Agent finished. Evaluated {processed_count}/{len(docs)} items."

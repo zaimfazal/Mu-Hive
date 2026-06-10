@@ -100,8 +100,8 @@ async def run_zulip_notifications():
         writer = ZulipWriter(email=creds['email'], api_key=creds['api_key'], site=creds['site'])
 
         # Read from Database — filter out already-sent items
-        news_items = db.get_top_opportunities_by_ig_and_category(ig_name, "News", limit=5)
-        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathons", limit=5)
+        news_items = db.get_top_opportunities_by_ig_and_category(ig_name, "News", limit=20)
+        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathons", limit=20)
         news_items = [i for i in news_items if not i.get('zulip_sent', False)]
         hack_items = [i for i in hack_items if not i.get('zulip_sent', False)]
 
@@ -131,7 +131,7 @@ async def run_zulip_notifications():
             # Mark all delivered items as zulip_sent = TRUE
             if sent_ids:
                 notify_cur.execute(
-                    "UPDATE scraped_data SET zulip_sent = TRUE WHERE id IN %s",
+                    "UPDATE events SET zulip_sent = TRUE WHERE id IN %s",
                     (tuple(sent_ids),)
                 )
             logger.info(f"✅ Notified #{zulip_channel} with {len(sent_ids)} items.")

@@ -47,6 +47,8 @@ def _ensure_events_schema() -> None:
                 location TEXT,
                 days_left INTEGER,
                 mail_sent BOOLEAN DEFAULT FALSE,
+                zulip_sent BOOLEAN DEFAULT FALSE,
+                deadline TEXT,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
@@ -62,6 +64,8 @@ def _ensure_events_schema() -> None:
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS location TEXT;")
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS days_left INTEGER;")
         cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS mail_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS zulip_sent BOOLEAN DEFAULT FALSE;")
+        cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS deadline TEXT;")
         cur.execute(
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;"
         )
@@ -92,6 +96,7 @@ def _upsert_event_without_constraint(
     platform: str | None = None,
     location: str | None = None,
     days_left: int | None = None,
+    deadline: str | None = None,
 ) -> int:
     now = datetime.now(timezone.utc)
     with db_conn.get_cursor() as cur:
@@ -113,10 +118,11 @@ def _upsert_event_without_constraint(
                     platform = %s,
                     location = %s,
                     days_left = %s,
+                    deadline = %s,
                     updated_at = %s
                 WHERE id = %s;
                 """,
-                (title, ig, "Hackathons", summary, validity_score, platform, location, days_left, now, existing[0]),
+                (title, ig, "Hackathons", summary, validity_score, platform, location, days_left, deadline, now, existing[0]),
             )
             return existing[0]
 
@@ -124,12 +130,12 @@ def _upsert_event_without_constraint(
             """
             INSERT INTO events (
                 title, ig, category, summary, apply_link, validity_score,
-                platform, location, days_left, updated_at
+                platform, location, days_left, deadline, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
-            (title, ig, "Hackathons", summary, apply_link, validity_score, platform, location, days_left, now),
+            (title, ig, "Hackathons", summary, apply_link, validity_score, platform, location, days_left, deadline, now),
         )
         return cur.fetchone()[0]
 
@@ -168,7 +174,9 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
             platform = event.get("platform", None)
             location = event.get("location", None)
             days_left = event.get("days_remaining", None)
-            start_date = event.get("startDate", None)
+            end_date = event.get("endDate", None)
+            start_date_fallback = event.get("startDate", None)
+            deadline = end_date or start_date_fallback  # Use endDate as deadline, fallback to startDate
             source_engine = platform or "API"
 
             # ── Generate summary from structured API metadata ──
@@ -180,7 +188,8 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
                     f"Interest Group: {normalized_ig}\n"
                     f"Platform: {platform or 'N/A'}\n"
                     f"Location: {location or 'Online'}\n"
-                    f"Start Date: {start_date or 'TBA'}\n"
+                    f"Start Date: {start_date_fallback or 'TBA'}\n"
+                    f"End Date: {end_date or 'TBA'}\n"
                     f"Days Left: {days_left or 'N/A'}\n\n"
                     "Write a crisp 1-sentence summary."
                 )
@@ -209,6 +218,8 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
                     platform=platform,
                     location=location,
                     days_left=days_left,
+                    deadline=deadline,
+
                 )
                 if inserted:
                     inserted_scraped += 1

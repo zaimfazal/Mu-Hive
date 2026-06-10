@@ -14,9 +14,9 @@ class EventRepository:
             cur.execute("""
                 INSERT INTO events (
                     title, ig, category, summary, apply_link, validity_score,
-                    platform, location, days_left, updated_at
+                    platform, location, days_left, deadline, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (apply_link) DO UPDATE SET
                     title = EXCLUDED.title,
                     ig = EXCLUDED.ig,
@@ -26,6 +26,7 @@ class EventRepository:
                     platform = EXCLUDED.platform,
                     location = EXCLUDED.location,
                     days_left = EXCLUDED.days_left,
+                    deadline = EXCLUDED.deadline,
                     updated_at = EXCLUDED.updated_at
                 RETURNING id;
             """, (
@@ -38,6 +39,7 @@ class EventRepository:
                 event_data.get('platform'),
                 event_data.get('location'),
                 event_data.get('days_left'),
+                event_data.get('deadline'),
                 datetime.now(timezone.utc)
             ))
             return cur.fetchone()[0]

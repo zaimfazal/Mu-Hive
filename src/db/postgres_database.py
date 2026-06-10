@@ -187,7 +187,7 @@ class DatabaseFacade:
             
         return rows
 
-    def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None, raw_score=None, score_breakdown=None):
+    def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None, raw_score=None, score_breakdown=None, structured_metadata=None):
         """Update item after LLM evaluation."""
         with db_conn.get_cursor() as cur:
             # Fetch current data to preserve other fields
@@ -209,32 +209,80 @@ class DatabaseFacade:
                 data['summary'] = generated_summary
             if category:
                 data['category'] = category
+
+            # Merge structured metadata from LLM (hackathon details)
+            if structured_metadata:
+                data['structured_metadata'] = structured_metadata
             
             status = 'processed' if score > 0 else 'irrelevant'
             
-            cur.execute("""
-                UPDATE scraped_data 
-                SET status = %s, data = %s, ig = %s
-                WHERE id = %s
-            """, (status, json.dumps(data), tags[0] if tags else 'Unknown', item_id))
+            try:
+                cur.execute("""
+                    UPDATE scraped_data 
+                    SET status = %s, data = %s, ig = %s
+                    WHERE id = %s
+                """, (status, json.dumps(data), tags[0] if tags else 'Unknown', item_id))
+            except Exception as e:
+                # Catch unique violation if the URL and IG combination already exists
+                import psycopg2
+                if isinstance(e, psycopg2.errors.UniqueViolation) or "unique constraint" in str(e).lower():
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Duplicate scraped_data entry found for URL: %s and IG: %s. Deleting duplicate row ID %s.",
+                        url, tags[0] if tags else 'Unknown', item_id
+                    )
+                    cur.execute("DELETE FROM scraped_data WHERE id = %s", (item_id,))
+                    return False
+                raise e
             
             if status == 'processed' and tags:
                 # Extract optional fields from scraped_data
                 platform_val = data.get('platform') or source or 'RSS'
                 location_val = data.get('location')
+
+                # Extract deadline from structured_metadata (LLM returns 'End' key)
+                deadline_val = None
+                if structured_metadata:
+                    deadline_val = (
+                        structured_metadata.get('End')
+                        or structured_metadata.get('end')
+                        or structured_metadata.get('Deadline')
+                        or structured_metadata.get('deadline')
+                    )
+                # Fallback to JSONB data fields
+                if not deadline_val:
+                    deadline_val = data.get('endDate') or data.get('deadline')
+
+                # Extract location from structured_metadata if not already set
+                if not location_val and structured_metadata:
+                    location_val = (
+                        structured_metadata.get('Location')
+                        or structured_metadata.get('location')
+                        or structured_metadata.get('Mode')
+                        or structured_metadata.get('mode')
+                    )
+
+                # Extract platform from structured_metadata if not already set
+                if structured_metadata and (not platform_val or platform_val == 'RSS'):
+                    platform_val = (
+                        structured_metadata.get('Platform')
+                        or structured_metadata.get('platform')
+                        or platform_val
+                    )
+
                 # Compute days_left / deadline if possible
                 days_left_val = None
                 if 'days_left' in data:
                     days_left_val = data.get('days_left')
                 else:
-                    # Try to compute from startDate if present (ISO format)
-                    start_str = data.get('startDate')
-                    if start_str:
+                    # Try to compute from deadline if present (ISO format)
+                    deadline_str = deadline_val or data.get('endDate') or data.get('startDate')
+                    if deadline_str:
                         try:
                             from datetime import datetime, timezone
-                            start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00')).astimezone(timezone.utc)
+                            dl_dt = datetime.fromisoformat(deadline_str.replace('Z', '+00:00')).astimezone(timezone.utc)
                             now = datetime.now(timezone.utc)
-                            delta = (start_dt - now).days
+                            delta = (dl_dt - now).days
                             days_left_val = max(delta, 0)
                         except Exception:
                             days_left_val = None
@@ -252,6 +300,7 @@ class DatabaseFacade:
                             'platform': platform_val,
                             'location': location_val,
                             'days_left': days_left_val,
+                            'deadline': deadline_val,
                         })
                     except Exception as evt_err:
                         import logging
@@ -262,56 +311,44 @@ class DatabaseFacade:
             return cur.rowcount > 0
 
     def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5):
-        """Fetches top-scored opportunities for a specific IG and Category."""
-        # For News: include uncategorized items (old data). For Hackathons: strict match only.
-        if category == "News":
-            query = """
-                SELECT * FROM scraped_data
-                WHERE status = 'processed'
-                AND ig = %s
-                AND (data->>'category' = %s OR data->>'category' IS NULL)
-                AND (zulip_sent = FALSE OR zulip_sent IS NULL)
-            """
-        else:
-            query = """
-                SELECT * FROM scraped_data
-                WHERE status = 'processed'
-                AND ig = %s
-                AND data->>'category' = %s
-                AND (zulip_sent = FALSE OR zulip_sent IS NULL)
-            """
+        """Fetches top-scored opportunities for a specific IG and Category from the events table."""
+        query = """
+            SELECT id, title, apply_link, ig, category, summary, validity_score, platform, location, deadline, days_left, zulip_sent, created_at
+            FROM events
+            WHERE ig = %s
+            AND category = %s
+            AND (zulip_sent = FALSE OR zulip_sent IS NULL)
+        """
         params = [ig, category]
-        query, params = self._append_orchestrator_time_filter(query, params, column="scraped_at")
+        query, params = self._append_orchestrator_time_filter(query, params, column="created_at")
         query += """
             ORDER BY
-                (data->>'quality_score')::int DESC,
-                CASE WHEN source = 'RSS' THEN 0 ELSE 1 END,
-                scraped_at DESC
+                validity_score DESC,
+                created_at DESC
             LIMIT %s;
         """
         params.append(limit)
 
         with db_conn.get_cursor(factory=RealDictCursor) as cur:
-            # Note: We filter by 'processed' and sort by quality_score stored in JSONB
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
             
-        # Adapt for agents
+        # Adapt for agents (backward compatibility with scraped_data structure)
         for row in rows:
             row['_id'] = row['id']
-            json_data = row.get('data') or {}
-            # Extract quality_score from JSONB (Bug 1 fix)
-            row['quality_score'] = json_data.get('quality_score', 0)
-            # Summary fallback chain (Bug 2 fix)
-            row['summary'] = (
-                json_data.get('summary')
-                or json_data.get('scraped_meta_description')
-                or (json_data.get('scraped_full_text', '') or '')[:300]
-                or ''
-            )
-            row['link'] = row['url']
-            row['source_engine'] = row.get('source', '')
-            row['category'] = json_data.get('category', 'Unknown')
+            row['url'] = row['apply_link']
+            row['data'] = {
+                'location': row['location'] or 'Online',
+                'platform': row['platform'] or 'RSS',
+                'days_left': row['days_left'],
+                'endDate': row['deadline'] or 'TBA',
+                'summary': row['summary']
+            }
+            row['quality_score'] = row['validity_score'] or 0
+            row['summary'] = row['summary'] or 'No summary available.'
+            row['link'] = row['apply_link']
+            row['source_engine'] = row['platform'] or ''
+            row['category'] = row['category'] or 'Unknown'
         return rows
         
     def update_event_summary_by_link(self, link: str, summary: str):

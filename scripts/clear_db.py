@@ -56,24 +56,13 @@ def main():
         )
         scraped_count = cur.fetchone()[0]
 
-        # 2. Count matching rows in events
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM events 
-            WHERE LOWER(category) = ANY(%s);
-            """,
-            (categories,)
-        )
-        events_count = cur.fetchone()[0]
-
         print("-" * 50)
         print(f"Target categories: {', '.join(categories)}")
         print(f"Matching rows found:")
         print(f"  - scraped_data: {scraped_count} rows")
-        print(f"  - events: {events_count} rows")
         print("-" * 50)
 
-        if scraped_count == 0 and events_count == 0:
+        if scraped_count == 0:
             print("No matching records found. Nothing to clear.")
             return
 
@@ -96,18 +85,8 @@ def main():
         )
         scraped_deleted = cur.rowcount
 
-        cur.execute(
-            """
-            DELETE FROM events 
-            WHERE LOWER(category) = ANY(%s);
-            """,
-            (categories,)
-        )
-        events_deleted = cur.rowcount
-
         print("[+] Deletion completed successfully:")
         print(f"  - Deleted {scraped_deleted} rows from scraped_data")
-        print(f"  - Deleted {events_deleted} rows from events")
 
     except Exception as e:
         print(f"[!] Error during database operation: {e}")

@@ -62,18 +62,37 @@ def run_email_agent():
                 logger.warning(f"Invalid IG mapping in ig_mails: '{raw_ig}'")
                 continue
             
-            # Fetch unsent events for this IG, including platform & location
+            # Fetch unsent News for this IG (ordered by validity_score, limit 20)
             cursor.execute(
                 """
-                SELECT id, category, summary, apply_link, platform, location
+                SELECT id, category, summary, apply_link, platform, location, deadline
                 FROM events
                 WHERE ig = %s
+                    AND category = 'News'
                     AND mail_sent = FALSE
-                ORDER BY category ASC
+                ORDER BY validity_score DESC, created_at DESC
+                LIMIT 20
                 """,
                 (ig,)
             )
-            events = cursor.fetchall()
+            news_events = cursor.fetchall()
+
+            # Fetch unsent Hackathons for this IG (ordered by validity_score, limit 20)
+            cursor.execute(
+                """
+                SELECT id, category, summary, apply_link, platform, location, deadline
+                FROM events
+                WHERE ig = %s
+                    AND category = 'Hackathons'
+                    AND mail_sent = FALSE
+                ORDER BY validity_score DESC, created_at DESC
+                LIMIT 20
+                """,
+                (ig,)
+            )
+            hack_events = cursor.fetchall()
+
+            events = news_events + hack_events
             
             if not events:
                 logger.info("[%s] No events, skipping.", ig)
@@ -91,13 +110,17 @@ def run_email_agent():
                 summ = str(e['summary'] or "No summary provided.").replace("\n", "<br>").strip()
                 link = str(e['apply_link'] or "No link available.").strip()
                 link_label = "Apply link"
+                extra = ""
                 if cat.lower() == "hackathons":
                     platform = str(e['platform'] or "").strip()
                     location = str(e['location'] or "").strip()
+                    deadline = str(e['deadline'] or "").strip()
                     if platform:
-                        extra += f"<b>Platform:</b> {platform}<br>"
+                         extra += f"<b>Platform:</b> {platform}<br>"
                     if location:
-                        extra += f"<b>Location:</b> {location}<br>"
+                         extra += f"<b>Location:</b> {location}<br>"
+                    if deadline and deadline.lower() != "none":
+                         extra += f"<b>Deadline:</b> {deadline}<br>"
                 else:
                     link_label = "Read more"
 
