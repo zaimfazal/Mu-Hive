@@ -33,7 +33,11 @@ def plan_digests():
                         "source_engine": r.get("source_engine", r.get("source", "")),
                         "category": cat,
                         "created_at": r.get("created_at", None),
-                        "structured_metadata": r.get("structured_metadata", {}),
+                        "structured_metadata": r.get("structured_metadata") or {
+                            "Platform": r.get("data", {}).get("platform", "Unknown"),
+                            "Location": r.get("data", {}).get("location", "Online"),
+                            "Deadline": r.get("data", {}).get("endDate", "TBA")
+                        },
                     })
         
         if opportunities_by_cat:

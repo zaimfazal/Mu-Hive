@@ -99,9 +99,9 @@ async def run_zulip_notifications():
         logger.info(f"🤖 Processing Notifications for {ig_name} -> #{zulip_channel}")
         writer = ZulipWriter(email=creds['email'], api_key=creds['api_key'], site=creds['site'])
 
-        # Read from Database — filter out already-sent items
-        news_items = db.get_top_opportunities_by_ig_and_category(ig_name, "News", limit=20)
-        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathons", limit=20)
+        # Read from Database — fetch top 20 UNSENT items
+        news_items = db.get_top_opportunities_by_ig_and_category(ig_name, "News", limit=20, include_sent=False)
+        hack_items = db.get_top_opportunities_by_ig_and_category(ig_name, "Hackathons", limit=20, include_sent=False)
         news_items = [i for i in news_items if not i.get('zulip_sent', False)]
         hack_items = [i for i in hack_items if not i.get('zulip_sent', False)]
 

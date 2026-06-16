@@ -52,18 +52,37 @@ WEB_DEV_RSS_FEEDS = [
 UI_UX_RSS_FEEDS = [
     "https://uxdesign.cc/feed",
     "https://www.awwwards.com/blog/feed/",
-    "https://uxplanet.org/feed"
+    "https://uxplanet.org/feed",
+    # --- Added: balance coverage (3 → 8 feeds) ---
+    "https://www.nngroup.com/feed/rss/",          # Nielsen Norman Group — UX research gold standard
+    "https://alistapart.com/main/feed/",           # A List Apart — web design standards & best practices
+    "https://designmodo.com/feed/",                # Designmodo — design tools, trends, tutorials
+    "https://www.interaction-design.org/literature/feed",  # IxDF — interaction design articles
+    "https://uxmovement.com/feed/",                # UX Movement — UI patterns and usability
 ]
 
 CYBER_SEC_RSS_FEEDS = [
     "https://krebsonsecurity.com/feed/",
-    "https://thehackernews.com/feeds/posts/default"
+    "https://thehackernews.com/feeds/posts/default",
+    # --- Added: balance coverage (2 → 8 feeds) ---
+    "https://www.bleepingcomputer.com/feed/",      # BleepingComputer — breach reporting & malware
+    "https://www.darkreading.com/rss.xml",         # Dark Reading — enterprise security analysis
+    "https://www.securityweek.com/feed/",          # SecurityWeek — CVE coverage & breach reports
+    "https://feeds.feedburner.com/eset/blog",      # ESET — threat research & malware analysis
+    "https://www.cisa.gov/news.xml",               # CISA — US government security advisories
+    "https://blog.qualys.com/feed",                # Qualys — vulnerability research
 ]
 
 DATA_SCIENCE_RSS_FEEDS = [
     "https://medium.com/feed/kaggle-blog",
     "https://towardsdatascience.com/feed",
-    "https://www.kdnuggets.com/feed"
+    "https://www.kdnuggets.com/feed",
+    # --- Added: balance coverage (3 → 8 feeds) ---
+    "https://blog.dataiku.com/feed",               # Dataiku — enterprise data science & MLOps
+    "https://databricks.com/feed",                 # Databricks — lakehouse, Spark, data engineering
+    "https://aws.amazon.com/blogs/big-data/feed/", # AWS Big Data — cloud data engineering
+    "https://blogs.sas.com/content/feed/",         # SAS — analytics industry insights
+    "https://neptune.ai/blog/feed",                # Neptune.ai — MLOps & experiment tracking
 ]
 
 ALL_RSS_FEEDS = {
@@ -84,3 +103,21 @@ SOURCE_PRIORITY = {
     "Firecrawl": 1,     # Firecrawl scraped — direct source
 }
 
+# First-party domains that get an extra scoring boost.
+# Items from these domains are more likely to be original announcements.
+FIRST_PARTY_DOMAINS = [
+    "openai.com",
+    "deepmind.google",
+    "blog.google",
+    "blogs.nvidia.com",
+    "huggingface.co",
+    "anthropic.com",
+    "meta.ai",
+    "ai.meta.com",
+    "github.blog",
+    "devblogs.microsoft.com",
+    "aws.amazon.com",
+    "cloud.google.com",
+    "figma.com",
+    "cisa.gov",
+]

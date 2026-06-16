@@ -150,6 +150,10 @@ async def run_pipeline():
     logger.info("")
 
     # Phase 3: Communicator — curated digest output
+    # NOTE: Terminal displays the curated top-N items per IG (limit=5 per category),
+    # while Zulip/Email agents send ALL qualifying items (score >= 6) to their
+    # respective channels. This is by design — terminal is a curated preview,
+    # distribution channels get the full qualified set.
     comm_stats = None
     try:
         logger.info("Phase 3: Running Communicator (curated digest output)...")

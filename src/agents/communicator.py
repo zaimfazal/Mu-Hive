@@ -6,6 +6,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.columns import Columns
 from src.agents.planner import plan_digests
+from src.agents.trend_detector import detect_trends
 from src.config.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -98,13 +99,15 @@ def format_hackathon_details(opp: dict) -> str:
     if fields:
         if fields.get("Platform"):
             details += f"[dim]🏢 Platform:[/dim] {fields['Platform']}\n"
-        if fields.get("Start"):
-            start = fields.get("Start", "TBA")
-            end = fields.get("End", "")
-            if end and end != start:
+        if fields.get("Start") or fields.get("End") or fields.get("Deadline"):
+            start = fields.get("Start", "")
+            end = fields.get("End") or fields.get("Deadline", "")
+            if start and end and start != end:
                 details += f"[dim]📅 Dates:[/dim] {start} → {end}\n"
-            else:
+            elif start:
                 details += f"[dim]📅 Start:[/dim] {start}\n"
+            elif end:
+                details += f"[dim]📅 Deadline:[/dim] {end}\n"
         if fields.get("Location"):
             details += f"[dim]📍 Location:[/dim] {fields['Location']}\n"
         if fields.get("Prize Pool") and fields["Prize Pool"] not in ("", "TBA"):
@@ -205,6 +208,8 @@ def format_digest(ig, opportunities_by_cat):
                 details = format_news_details(opp)
             
             score_display = f"{opp['score']}/10"
+            if opp.get('trending'):
+                score_display += "\n🔥"
             table.add_row(score_display, details)
             
         console.print(table)
@@ -217,6 +222,9 @@ def run_communicator():
     Returns a stats dict for phase reporting."""
     logger.info("Initializing Communicator Agent...")
     digests = plan_digests()
+
+    # Post-scoring trend detection: identify items reported by multiple sources
+    digests = detect_trends(digests)
 
     stats = {
         "igs_with_content": 0,

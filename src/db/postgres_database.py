@@ -230,6 +230,10 @@ class DatabaseFacade:
             # Store LLM-generated summary if available (Bug 7 fix)
             if generated_summary:
                 data['summary'] = generated_summary
+            
+            # Extract final summary for the events table (use LLM summary or fallback to original scraped summary)
+            final_summary = generated_summary or data.get('summary') or ''
+            
             normalized_category = self._normalize_category(category or data.get('category'))
             data['category'] = normalized_category
 
@@ -325,7 +329,7 @@ class DatabaseFacade:
                             'title': title,
                             'ig': tags[0],
                             'category': normalized_category,
-                            'summary': generated_summary,
+                            'summary': final_summary,
                             'apply_link': url,
                             'validity_score': score,
                             'platform': platform_val,
@@ -341,27 +345,36 @@ class DatabaseFacade:
             
             return cur.rowcount > 0
 
-    def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5):
-        """Fetches top-scored opportunities for a specific IG and Category from the events table."""
-        query = """
-            SELECT e.id, e.title, e.apply_link, e.ig, e.category, e.summary, e.validity_score, e.platform, e.location, e.deadline, e.days_left, e.zulip_sent, e.created_at, s.data->'structured_metadata' as structured_metadata
+    def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5, include_sent=True):
+        """Fetches top-scored opportunities for a specific IG and Category from the events table.
+        Uses DISTINCT ON to prevent duplicate events when scraped_data has multiple rows for the same URL."""
+        inner_query = """
+            SELECT DISTINCT ON (e.apply_link)
+                e.id, e.title, e.apply_link, e.ig, e.category, e.summary,
+                e.validity_score, e.platform, e.location, e.deadline,
+                e.days_left, e.zulip_sent, e.created_at,
+                s.data->'structured_metadata' as structured_metadata,
+                s.source as source_engine
             FROM events e
-            LEFT JOIN scraped_data s ON e.apply_link = s.url
+            LEFT JOIN scraped_data s ON e.apply_link = s.url AND e.ig = s.ig
             WHERE e.ig = %s
             AND e.category = %s
-            AND (e.zulip_sent = FALSE OR e.zulip_sent IS NULL)
         """
         params = [ig, category]
-        query, params = self._append_orchestrator_time_filter(query, params, column="e.created_at")
-        query += """
+        
+        if not include_sent:
+            inner_query += " AND (e.zulip_sent = FALSE OR e.zulip_sent IS NULL)"
+            
+        inner_query, params = self._append_orchestrator_time_filter(inner_query, params, column="e.created_at")
+        inner_query += """
+            ORDER BY e.apply_link, e.validity_score DESC
+        """
+        # Wrap in subquery so we can ORDER BY score after DISTINCT ON
+        query = f"""
+            SELECT * FROM ({inner_query}) AS unique_events
             ORDER BY
-                e.validity_score DESC,
-                CASE
-                    WHEN s.data->>'published_at' ~ '^[0-9]+(\\.[0-9]+)?$'
-                    THEN to_timestamp((s.data->>'published_at')::double precision)
-                    ELSE e.created_at
-                END DESC,
-                e.created_at DESC
+                validity_score DESC,
+                created_at DESC
             LIMIT %s;
         """
         params.append(limit)
@@ -369,7 +382,7 @@ class DatabaseFacade:
         with db_conn.get_cursor(factory=RealDictCursor) as cur:
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
-            
+
         # Adapt for agents (backward compatibility with scraped_data structure)
         for row in rows:
             row['_id'] = row['id']
@@ -384,7 +397,7 @@ class DatabaseFacade:
             row['quality_score'] = row['validity_score'] or 0
             row['summary'] = row['summary'] or 'No summary available.'
             row['link'] = row['apply_link']
-            row['source_engine'] = row['platform'] or ''
+            row['source_engine'] = row.get('source_engine') or row['platform'] or ''
             row['category'] = row['category'] or 'Unknown'
             row['structured_metadata'] = row.get('structured_metadata') or {}
         return rows

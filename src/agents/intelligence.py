@@ -10,7 +10,7 @@ import asyncio
 from src.db.postgres_database import DatabaseFacade as Database
 from src.config.agent_config import model, shared_model_settings
 from src.config.logging_config import setup_logging
-from src.config.sources import SOURCE_PRIORITY
+from src.config.sources import SOURCE_PRIORITY, FIRST_PARTY_DOMAINS
 from src.config.constants import MASTER_IGS
 
 logger = logging.getLogger(__name__)
@@ -168,8 +168,27 @@ def _compute_trend_bonus(title: str, content: str, category: str) -> int:
         "launch", "released", "announces", "open source", "sota", "state-of-the-art",
         "benchmark", "frontier", "zero-day", "0-day", "cve-", "breach",
         "ransomware", "acquisition", "funding", "research paper", "model weights",
+        # Expanded: more signal words for trending detection
+        "breaking", "critical", "vulnerability", "patch", "exploit",
+        "paradigm", "disruption", "shutdown", "ban", "regulation",
+        "partnership", "collaboration", "open-source", "weights released",
+        "surpasses", "outperforms", "new model", "foundation model",
+        "agent", "agentic", "autonomous", "government",
+        "data breach", "supply chain", "malware", "phishing",
+        "figma", "design system", "accessibility",
     ]
     return 1 if any(term in blob for term in hot_terms) else 0
+
+
+def _compute_first_party_bonus(url: str) -> int:
+    """Give +1 bonus to items from first-party announcement domains."""
+    if not url:
+        return 0
+    url_lower = url.lower()
+    for domain in FIRST_PARTY_DOMAINS:
+        if domain in url_lower:
+            return 1
+    return 0
 
 
 def _extract_status_code(exc: Exception) -> int | None:
@@ -308,9 +327,10 @@ async def run_intelligence(batch_limit=15):
                         pass
 
                 trend_bonus = _compute_trend_bonus(title, content, _normalize_category(intelligence.category))
+                first_party_bonus = _compute_first_party_bonus(doc.get("url", ""))
 
                 # Restructured scoring logic (only apply a capped bonus if raw_score >= 6).
-                bonus = min(2, source_boost + recency_bonus + trend_bonus)
+                bonus = min(2, source_boost + recency_bonus + trend_bonus + first_party_bonus)
                 if raw_score == 0:
                     final_score = 0
                     score_breakdown = "0 (irrelevant)"
