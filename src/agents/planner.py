@@ -33,6 +33,7 @@ def plan_digests():
                         "source_engine": r.get("source_engine", r.get("source", "")),
                         "category": cat,
                         "created_at": r.get("created_at", None),
+                        "structured_metadata": r.get("structured_metadata", {}),
                     })
         
         if opportunities_by_cat:

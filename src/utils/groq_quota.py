@@ -4,8 +4,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-GROQ_TPD_LIMIT = 500_000
-GROQ_SAFETY_BUFFER = 10_000   # reserve — don't attempt if < 10k tokens left
+GROQ_TPD_LIMIT = 100_000      # Groq free tier actual TPD limit
+GROQ_SAFETY_BUFFER = 15_000   # reserve — route to OpenRouter before hard 429s
 
 _groq_tokens_used: int = 0    # module-level counter, updated from 429 bodies
 

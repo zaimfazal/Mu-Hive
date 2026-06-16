@@ -14,19 +14,12 @@ from src.config.sources import SOURCE_PRIORITY
 from src.config.constants import MASTER_IGS
 
 logger = logging.getLogger(__name__)
-MAX_LLM_API_ERRORS_BEFORE_FAIL = 5
+MAX_LLM_API_ERRORS_BEFORE_FAIL = 10
 HARD_FAIL_STATUS_CODES = {400, 429}
 
 _VALID_IGS = set(MASTER_IGS)
-_IG_NORMALIZATION = {
-    "ai": "AI",
-    "data science": "Data Science",
-    "web development": "Web Development",
-    "cyber security": "Cyber Security",
-    "cybersecurity": "Cyber Security",
-    "ui/ux": "UI/UX",
-    "ui ux": "UI/UX",
-}
+
+from src.utils.ig_normalizer import normalize_ig as _canonical_ig
 
 
 class OpportunityIntelligence(BaseModel):
@@ -74,63 +67,37 @@ class LLMFailureThresholdExceeded(RuntimeError):
 
 
 INTELLIGENCE_SYSTEM_PROMPT = """\
-You are an expert technical intelligence classifier for Mu-Hive, a tech community platform.
-Your job is to evaluate scraped articles/opportunities and classify them into the correct Interest Groups (IGs).
+You are a technical intelligence classifier for Mu-Hive, a tech community platform.
+Evaluate articles and classify them into Interest Groups (IGs).
 
-## Interest Group Definitions (ONLY tag if content is DIRECTLY about these topics):
+## Interest Groups (tag ONLY if content is DIRECTLY about these):
+- **AI**: ML, deep learning, LLMs, NLP, computer vision, GenAI, AI frameworks.
+- **Data Science**: Analytics, data engineering, visualization, statistical modeling, data pipelines.
+- **Web Development**: Frontend/backend dev, JS/TS, React, Node.js, Django, Flask, APIs, DevOps, cloud.
+- **Cyber Security**: Infosec, ethical hacking, CTFs, vulnerabilities, malware, threat intel, data breaches, ransomware, phishing.
+- **UI/UX**: UX/UI design, UX research, Figma, prototyping, interaction design, design systems.
 
-- **AI**: Artificial intelligence, machine learning, deep learning, LLMs, NLP, computer vision, neural networks, GenAI, AI research papers, AI tools and frameworks (TensorFlow, PyTorch, Hugging Face).
-- **Data Science**: Data analytics, data engineering, big data, data visualization, statistical modeling, Kaggle, pandas, business intelligence, data pipelines.
-- **Web Development**: Frontend/backend development, JavaScript, TypeScript, React, Next.js, Node.js, Django, Flask, Vue, Angular, HTML/CSS, web frameworks, APIs, DevOps, cloud deployment.
-- **Cyber Security**: Cybersecurity, infosec, ethical hacking, penetration testing, CTFs, vulnerability disclosures, malware analysis, threat intelligence, SOC, network security, zero-day exploits, trojans, phishing, ransomware, NFC attacks, data breaches, APT campaigns.
-- **UI/UX**: User experience design, user interface design, UX research, Figma, prototyping, wireframing, interaction design, product design, usability testing, design systems.
+## Categories (STRICT — only 2):
+- **Hackathons**: ONLY actual upcoming hackathon/competition listings with registration links. Articles *about* hackathons = News.
+- **News**: Everything else.
 
-## Category Rules (STRICT — only 2 categories exist):
-- **Hackathons**: ONLY for actual upcoming hackathon/competition listings that people can register for. Must have a registration link or signup page. An article *about* a hackathon or reporting on hackathon results is NOT a hackathon — it is News.
-- **News**: Everything else — articles, tutorials, announcements, opinion pieces, research papers, product launches, blog posts, reports, etc.
+## Scoring Guide:
+- 9-10: Frontier model releases, major SOTA drops, critical zero-days, paradigm shifts, first-party announcements (OpenAI, DeepMind, Anthropic, Meta AI).
+- 7-8: Significant launches/updates, trending discussions, impactful research, major funding/acquisitions.
+- 5-6: Solid tutorials, industry analysis, conference insights, security advisories.
+- 1-4: Rehashed content, listicles, minor updates, promotional, outdated.
 
-## Trending & Hot-Topic Scoring (AI moves fast — prioritize what matters NOW):
-Score 9-10 (GROUNDBREAKING / MUST-READ):
-- New frontier model releases (GPT-5, Gemini 3, Claude 4, Llama 4, etc.)
-- Major open-source model drops (new SOTA on benchmarks)
-- Critical zero-day vulnerabilities or massive data breaches
-- Paradigm shifts: new architectures, novel training methods, agentic AI breakthroughs
-- First-party announcements from OpenAI, Google DeepMind, Anthropic, Meta AI, xAI, Mistral
+## Rules:
+1. Tag IGs only if content is DIRECTLY about that domain.
+2. Non-tech content (politics, sports, entertainment) → is_relevant=False, quality_score=1.
+3. Tangential tech mentions → NOT relevant.
+4. Multiple IGs only if article substantively covers multiple domains.
+5. Malware/trojans/phishing/breaches → "Cyber Security" only, NEVER "AI".
+6. Cybersecurity tools using ML internally → classify by PRIMARY topic ("Cyber Security").
+7. Hardware/semiconductor news → NOT any IG unless specifically about AI models.
+8. Physical product design → NOT "UI/UX" (digital interface design only).
 
-Score 7-8 (HIGH VALUE / TRENDING):
-- Significant product launches, API releases, framework updates (e.g., new React version, major library release)
-- Trending community discussions (viral posts, controversial takes with substance)
-- Important research papers with real-world implications
-- Major funding rounds, acquisitions, or strategic partnerships in AI/tech
-- New developer tools or platforms that change workflows
-
-Score 5-6 (USEFUL / INFORMATIVE):
-- Solid tutorials on cutting-edge topics (RAG, fine-tuning, agents)
-- Industry analysis and trend reports with original data
-- Conference talk summaries with novel insights
-- Security advisories and patch announcements
-
-Score 1-4 (LOW PRIORITY):
-- Rehashed or rewritten content from other sources
-- Generic listicles, opinion pieces without new information
-- Minor patch notes, incremental updates
-- Promotional content or thinly veiled advertisements
-- Old news or outdated content
-
-## Strict Classification Rules:
-1. ONLY tag an IG if the content is DIRECTLY and PRIMARILY about that domain. Do NOT tag loosely related content.
-2. Political news, sports, entertainment, world events, opinion pieces about non-tech topics, and general business news are NEVER relevant. Set is_relevant=False and quality_score=1 for these.
-3. If the content mentions tech only tangentially (e.g., a political article that briefly mentions AI policy), it is NOT relevant.
-4. If content has no clear connection to ANY tech Interest Group, set is_relevant=False and quality_score=1.
-5. A single article can belong to multiple IGs ONLY if it substantively covers multiple domains.
-
-## Common Misclassification Errors — DO NOT make these mistakes:
-- Malware, trojans, phishing, NFC attacks, data breaches, ransomware, APT groups → these are ONLY "Cyber Security", NEVER "AI"
-- An article about a security vulnerability or hacking campaign is NOT "AI" just because it involves technology
-- Hardware news, chip manufacturing, semiconductor news → NOT any IG unless it is specifically about AI chips/models
-- General tech company earnings, mergers, layoffs → NOT relevant unless specifically about the IG's domain
-- A cybersecurity tool that uses ML internally is still "Cyber Security", NOT "AI" — classify by the article's PRIMARY topic
-- Design of physical products, architecture, fashion design → NOT "UI/UX" (UI/UX is digital interface design only)
+Return the pure JSON structured object directly. Do NOT wrap in XML tags.
 """
 
 intelligence_agent = Agent(
@@ -138,15 +105,19 @@ intelligence_agent = Agent(
     output_type=OpportunityIntelligence,
     model_settings=shared_model_settings,
     system_prompt=INTELLIGENCE_SYSTEM_PROMPT,
+    retries=3,
 )
 
 
 def _normalize_ig(tag: str) -> str | None:
+    """Normalize an IG tag using the canonical ig_normalizer as single source of truth."""
     if not tag:
         return None
-    canonical = _IG_NORMALIZATION.get(str(tag).strip().lower())
+    # First try the canonical normalizer (covers all known variants)
+    canonical = _canonical_ig(str(tag).strip())
     if canonical:
         return canonical
+    # Fallback: exact match against MASTER_IGS (handles already-canonical names)
     stripped = str(tag).strip()
     if stripped in _VALID_IGS:
         return stripped
@@ -180,6 +151,27 @@ def _validate_tags(llm_tags: list, source_ig: list) -> list:
     return validated
 
 
+def _normalize_category(category: str | None) -> str:
+    value = str(category or "").strip().lower()
+    if value == "hackathons":
+        return "Hackathons"
+    return "News"
+
+
+def _compute_trend_bonus(title: str, content: str, category: str) -> int:
+    """Small deterministic tie-breaker for genuinely hot news signals."""
+    if category != "News":
+        return 0
+
+    blob = f"{title} {content[:500]}".lower()
+    hot_terms = [
+        "launch", "released", "announces", "open source", "sota", "state-of-the-art",
+        "benchmark", "frontier", "zero-day", "0-day", "cve-", "breach",
+        "ransomware", "acquisition", "funding", "research paper", "model weights",
+    ]
+    return 1 if any(term in blob for term in hot_terms) else 0
+
+
 def _extract_status_code(exc: Exception) -> int | None:
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int):
@@ -207,8 +199,10 @@ def _extract_status_code(exc: Exception) -> int | None:
     return None
 
 
-async def run_agent_with_retry(agent, prompt, max_retries=3, initial_delay=5):
-    """Runs a pydantic-ai agent with exponential backoff on 429 rate limit errors."""
+async def run_agent_with_retry(agent, prompt, max_retries=5, initial_delay=5):
+    """Runs a pydantic-ai agent with exponential backoff on 429 rate limit errors.
+    Parses the retry-after hint from the error body when available.
+    Tuned for Groq free tier: more retries, longer wait caps."""
     delay = initial_delay
     for attempt in range(max_retries + 1):
         try:
@@ -216,30 +210,60 @@ async def run_agent_with_retry(agent, prompt, max_retries=3, initial_delay=5):
         except Exception as e:
             status_code = _extract_status_code(e)
             if status_code == 429 and attempt < max_retries:
+                # Try to parse the retry-after hint from the error body
+                parsed_delay = _parse_retry_after(str(e))
+                if parsed_delay and parsed_delay > 0:
+                    wait_time = min(parsed_delay, 180)  # Cap at 3 minutes for free tier
+                else:
+                    wait_time = delay
                 logger.warning(
-                    f"LLM API returned 429 (Rate Limit). Retrying in {delay}s (Attempt {attempt+1}/{max_retries})..."
+                    f"LLM API returned 429 (Rate Limit). Retrying in {wait_time:.0f}s (Attempt {attempt+1}/{max_retries})..."
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(wait_time)
                 delay *= 2
             else:
                 raise e
+
+
+def _parse_retry_after(error_text: str) -> float | None:
+    """Parse the retry-after duration from Groq's 429 error message.
+    Example: 'Please try again in 8m35.1168s'"""
+    match = re.search(r'try again in\s+(?:(\d+)m)?([\d.]+)s', error_text, re.IGNORECASE)
+    if match:
+        minutes = int(match.group(1)) if match.group(1) else 0
+        seconds = float(match.group(2))
+        return minutes * 60 + seconds
+    return None
 
 
 async def run_intelligence(batch_limit=15):
     """
     Evaluates and classifies unprocessed opportunities using the LLM.
     Processes up to batch_limit items per run to conserve API calls.
+    Returns a stats dict for phase reporting.
     """
     logger.info("Initializing Intelligence Agent (Evaluator + Classifier)...")
     db = Database()
     hard_fail_count = 0
+
+    stats = {
+        "total_evaluated": 0,
+        "processed": 0,
+        "irrelevant": 0,
+        "skipped_invalid_ig": 0,
+        "by_ig": {},
+        "by_category": {},
+        "by_score": {"9-10": 0, "7-8": 0, "5-6": 0, "1-4": 0, "0": 0},
+        "llm_errors": 0,
+        "llm_retries": 0,
+    }
 
     try:
         docs = db.get_unprocessed_for_intelligence(limit=batch_limit)
 
         if not docs:
             logger.info("No new opportunities require evaluation.")
-            return
+            return stats
 
         processed_count = 0
         for doc in docs:
@@ -255,7 +279,7 @@ async def run_intelligence(batch_limit=15):
                 f"Title: {title}\n"
                 f"Category: {category}\n"
                 f"Original IG Tags (from source — validate or override these): {source_ig}\n"
-                f"Content: {content[:3000]}\n\n"
+                f"Content: {content[:1500]}\n\n"
                 "Evaluate this content's relevance and quality. "
                 "Classify into the correct Interest Groups."
             )
@@ -283,38 +307,36 @@ async def run_intelligence(batch_limit=15):
                     except (ValueError, TypeError):
                         pass
 
-                # Restructured scoring logic (only apply bonus if raw_score >= 6)
-                bonus = source_boost + recency_bonus
+                trend_bonus = _compute_trend_bonus(title, content, _normalize_category(intelligence.category))
+
+                # Restructured scoring logic (only apply a capped bonus if raw_score >= 6).
+                bonus = min(2, source_boost + recency_bonus + trend_bonus)
                 if raw_score == 0:
                     final_score = 0
                     score_breakdown = "0 (irrelevant)"
                 elif raw_score >= 6:
                     final_score = min(10, raw_score + bonus)
-                    score_breakdown = f"{raw_score} + {bonus} bonus = {final_score}"
+                    score_breakdown = (
+                        f"{raw_score} + {bonus} bonus "
+                        f"(source={source_boost}, recency={recency_bonus}, trend={trend_bonus}) = {final_score}"
+                    )
                 else:
                     final_score = raw_score
                     score_breakdown = f"{raw_score} (no bonus applied as raw score < 6)"
 
-                # Post-LLM validation to catch misclassifications
+                # Post-LLM validation — single normalization pass using ig_normalizer
                 validated_tags = _validate_tags(intelligence.ig_tags, source_ig)
-                
-                from src.utils.ig_normalizer import normalize_ig
-                normalized_tags = []
-                for tag in validated_tags:
-                    canonical = normalize_ig(tag)
-                    if canonical:
-                        normalized_tags.append(canonical)
-                
-                validated_tags = normalized_tags
+
                 ig = validated_tags[0] if validated_tags else None
                 
                 if ig is None or ig.strip().lower() == "unknown":
                     logger.warning(f"Skipping item {item_id}: invalid IG '{ig}'")
                     db.update_intelligence(item_id, 0, [])
+                    stats["skipped_invalid_ig"] += 1
                     processed_count += 1
                     continue
                 
-                final_category = intelligence.category
+                final_category = _normalize_category(intelligence.category)
 
                 generated_summary = intelligence.summary if final_score >= 6 else None
                 if generated_summary:
@@ -336,17 +358,45 @@ async def run_intelligence(batch_limit=15):
                     link = doc.get("url", "")
                     if link:
                         db.update_event_summary_by_link(link, generated_summary)
+
+                # ── Track stats ──
+                stats["total_evaluated"] += 1
+                if final_score > 0:
+                    stats["processed"] += 1
+                else:
+                    stats["irrelevant"] += 1
+
+                # Score bucket
+                if final_score == 0:
+                    stats["by_score"]["0"] += 1
+                elif final_score <= 4:
+                    stats["by_score"]["1-4"] += 1
+                elif final_score <= 6:
+                    stats["by_score"]["5-6"] += 1
+                elif final_score <= 8:
+                    stats["by_score"]["7-8"] += 1
+                else:
+                    stats["by_score"]["9-10"] += 1
+
+                # IG distribution
+                for tag in validated_tags:
+                    stats["by_ig"][tag] = stats["by_ig"].get(tag, 0) + 1
+
+                # Category distribution
+                stats["by_category"][final_category] = stats["by_category"].get(final_category, 0) + 1
+
                 processed_count += 1
                 logger.info(
                     f"  -> Score: {score_breakdown} | "
                     f"Tags: {validated_tags} | Category: {final_category} | {intelligence.reasoning}"
                 )
 
-                await asyncio.sleep(2.5)
+                await asyncio.sleep(4)  # Pacing for Groq free tier (30 RPM)
             except Exception as e:
                 status_code = _extract_status_code(e)
                 if status_code in HARD_FAIL_STATUS_CODES:
                     hard_fail_count += 1
+                    stats["llm_errors"] += 1
                     logger.error(
                         "Hard LLM API error for ID %s (HTTP %s). Count=%s/%s.",
                         item_id,
@@ -360,6 +410,7 @@ async def run_intelligence(batch_limit=15):
                             f"{hard_fail_count} HTTP 400/429 errors in one run."
                         ) from e
 
+                stats["llm_errors"] += 1
                 logger.error(f"Intelligence processing failed for ID {item_id}: {e}", exc_info=True)
                 try:
                     db.update_intelligence(item_id, 0, [])
@@ -371,6 +422,8 @@ async def run_intelligence(batch_limit=15):
         )
     finally:
         db.close()
+
+    return stats
 
 
 if __name__ == "__main__":

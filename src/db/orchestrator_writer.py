@@ -31,6 +31,34 @@ def _normalize_ig(ig: str) -> str:
     return IG_NORMALIZATION.get(ig, ig)
 
 
+def _validity_from_curated_score(score: int | None) -> int:
+    """Map scraper curation points onto the 1-10 event validity scale."""
+    if score is None:
+        return DEFAULT_QUALITY_SCORE
+    try:
+        value = int(score)
+    except (TypeError, ValueError):
+        return DEFAULT_QUALITY_SCORE
+    if value >= 230:
+        return 10
+    if value >= 190:
+        return 9
+    if value >= 150:
+        return 8
+    if value >= 110:
+        return 7
+    if value >= 70:
+        return 6
+    return 5
+
+
+def _fallback_summary(title: str, ig: str, platform: str | None, location: str | None, days_left: int | None) -> str:
+    place = location or "Online"
+    source = f" on {platform}" if platform else ""
+    timing = f" with {days_left} day(s) left" if days_left is not None else ""
+    return f"{title} is a {ig}-relevant hackathon{source} hosted {place}{timing}."
+
+
 def _ensure_events_schema() -> None:
     with db_conn.get_cursor() as cur:
         cur.execute(
@@ -149,7 +177,13 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
     summaries directly here (no scraping needed) and mark them as processed.
     """
     import asyncio
-    from src.agents.summarizer import summarizer_agent
+
+    summarizer_agent = None
+    try:
+        from src.agents.summarizer import summarizer_agent as _summarizer_agent
+        summarizer_agent = _summarizer_agent
+    except BaseException as e:
+        logger.warning("Summarizer unavailable; using deterministic hackathon summaries: %s", e)
 
     db = DatabaseFacade()
     _ensure_events_schema()
@@ -178,26 +212,39 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
             start_date_fallback = event.get("startDate", None)
             deadline = end_date or start_date_fallback  # Use endDate as deadline, fallback to startDate
             source_engine = platform or "API"
+            validity_score = _validity_from_curated_score(event.get("score"))
+            structured_metadata = {
+                "Platform": platform or source_engine,
+                "Start": start_date_fallback or "TBA",
+                "End": end_date or "TBA",
+                "Location": location or "Online",
+                "Mode": "Online" if str(location or "").lower() in {"", "online", "virtual/online"} else location,
+                "Prize Pool": event.get("prizePool") or "",
+                "Registration Link": link,
+                "Cost": event.get("cost") or "",
+                "Eligibility": event.get("eligibility") or "",
+                "Tags": ", ".join(event.get("tags", []) or []),
+            }
 
             # ── Generate summary from structured API metadata ──
-            summary = None
-            try:
-                summary_prompt = (
-                    f"Title: {title}\n"
-                    f"Category: Hackathons\n"
-                    f"Interest Group: {normalized_ig}\n"
-                    f"Platform: {platform or 'N/A'}\n"
-                    f"Location: {location or 'Online'}\n"
-                    f"Start Date: {start_date_fallback or 'TBA'}\n"
-                    f"End Date: {end_date or 'TBA'}\n"
-                    f"Days Left: {days_left or 'N/A'}\n\n"
-                    "Write a crisp 1-sentence summary."
-                )
-                result = await summarizer_agent.run(summary_prompt)
-                summary = result.output.summary
-            except Exception as e:
-                logger.warning(f"Summarizer failed for '{title}': {e}")
-
+            summary = _fallback_summary(title, normalized_ig, platform, location, days_left)
+            if summarizer_agent is not None:
+                try:
+                    summary_prompt = (
+                        f"Title: {title}\n"
+                        f"Category: Hackathons\n"
+                        f"Interest Group: {normalized_ig}\n"
+                        f"Platform: {platform or 'N/A'}\n"
+                        f"Location: {location or 'Online'}\n"
+                        f"Start Date: {start_date_fallback or 'TBA'}\n"
+                        f"End Date: {end_date or 'TBA'}\n"
+                        f"Days Left: {days_left or 'N/A'}\n\n"
+                        "Write a crisp 1-sentence summary."
+                    )
+                    result = await summarizer_agent.run(summary_prompt)
+                    summary = result.output.summary
+                except Exception as e:
+                    logger.warning(f"Summarizer failed for '{title}': {e}")
             try:
                 inserted = db.insert_opportunity(
                     title=title,
@@ -207,14 +254,29 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
                     ig_tags=[normalized_ig],
                     category="Hackathons",
                     is_processed=True,
-                    quality_score=DEFAULT_QUALITY_SCORE,
+                    quality_score=validity_score,
+                    metadata={
+                        "platform": platform,
+                        "location": location,
+                        "days_left": days_left,
+                        "startDate": start_date_fallback,
+                        "endDate": end_date,
+                        "deadline": deadline,
+                        "structured_metadata": structured_metadata,
+                        "raw_curated_score": event.get("score"),
+                        "eventType": event.get("eventType"),
+                        "prizePool": event.get("prizePool"),
+                        "cost": event.get("cost"),
+                        "eligibility": event.get("eligibility"),
+                        "tags": event.get("tags", []),
+                    },
                 )
                 _upsert_event_without_constraint(
                     title=title,
                     ig=normalized_ig,
                     summary=summary,
                     apply_link=link,
-                    validity_score=DEFAULT_QUALITY_SCORE,
+                    validity_score=validity_score,
                     platform=platform,
                     location=location,
                     days_left=days_left,

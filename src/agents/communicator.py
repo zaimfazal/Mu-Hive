@@ -92,8 +92,8 @@ def format_hackathon_details(opp: dict) -> str:
     details = f"[bold]{title}[/bold]\n"
     details += f"[blue][link={link}]{display_url}[/link][/blue]\n"
     
-    # Parse structured fields from summary
-    fields = parse_hackathon_summary(summary)
+    # Parse structured fields from summary or use the provided metadata
+    fields = opp.get('structured_metadata') or parse_hackathon_summary(summary)
     
     if fields:
         if fields.get("Platform"):
@@ -213,13 +213,21 @@ def format_digest(ig, opportunities_by_cat):
 
 
 def run_communicator():
-    """Curates and displays the top-scored opportunities per Interest Group."""
+    """Curates and displays the top-scored opportunities per Interest Group.
+    Returns a stats dict for phase reporting."""
     logger.info("Initializing Communicator Agent...")
     digests = plan_digests()
 
+    stats = {
+        "igs_with_content": 0,
+        "total_items_displayed": 0,
+        "by_ig": {},
+        "by_category": {},
+    }
+
     if not digests:
         logger.warning("No opportunities passed quality threshold (score >= 6). Nothing to display.")
-        return
+        return stats
 
     console.print()
     console.print(Panel.fit(
@@ -234,10 +242,19 @@ def run_communicator():
         total_items = sum(len(cat_list) for cat_list in opportunities_by_cat.values())
         logger.info(f"Displayed {total_items} curated items for IG: {ig}")
 
+        # Track stats
+        stats["igs_with_content"] += 1
+        stats["total_items_displayed"] += total_items
+        stats["by_ig"][ig] = total_items
+        for cat_name, cat_list in opportunities_by_cat.items():
+            stats["by_category"][cat_name] = stats["by_category"].get(cat_name, 0) + len(cat_list)
+
     console.print(Panel.fit(
         "[bold green]✅  Pipeline complete. All digests displayed above.[/bold green]",
         border_style="green",
     ))
+
+    return stats
 
 if __name__ == "__main__":
     setup_logging()

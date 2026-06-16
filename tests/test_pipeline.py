@@ -194,31 +194,39 @@ class TestProcessEvents(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestDbInsert(unittest.TestCase):
-    """save_events() correctly persists grouped events to MongoDB."""
+    """save_events() correctly persists grouped events through DatabaseFacade."""
 
-    @patch("src.db.database.get_collection")
-    def test_insert_new_event(self, mock_get_collection):
+    @patch("src.scraping.scraper.DatabaseFacade")
+    def test_insert_new_event(self, mock_db_facade):
         """A new event should be inserted with correct field values."""
+        from src.scraping.curate import process_events
         from src.scraping.scraper import save_events
 
-        mock_collection = AsyncMock()
-        mock_get_collection.return_value = mock_collection
-        mock_collection.bulk_write.return_value.upserted_count = 1
-        mock_collection.bulk_write.return_value.modified_count = 0
+        mock_db = mock_db_facade.return_value
+        mock_db.link_exists.return_value = False
+        mock_db.insert_event.return_value = 123
 
-        event = _make_event(registrationLink="https://newtest.devfolio.co")
+        from datetime import datetime, timedelta
+        future = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d")
+        event = _make_event(
+            registrationLink="https://newtest.devfolio.co",
+            startDate=future,
+            endDate=future,
+        )
         grouped = process_events([event])
 
         inserted, updated = save_events(grouped)
-        self.assertGreaterEqual(inserted + updated, 0)
+        self.assertEqual(inserted, 1)
+        self.assertEqual(updated, 0)
+        mock_db.insert_event.assert_called_once()
 
-    @patch("src.db.database.get_collection")
-    def test_upsert_logic(self, mock_get_collection):
-        """Must call bulk_write with UpdateOne operations."""
+    @patch("src.scraping.scraper.DatabaseFacade")
+    def test_duplicate_event_is_not_inserted(self, mock_db_facade):
+        """Existing URL/IG pairs should not be inserted again."""
         from src.scraping.scraper import save_events
 
-        mock_collection = AsyncMock()
-        mock_get_collection.return_value = mock_collection
+        mock_db = mock_db_facade.return_value
+        mock_db.link_exists.return_value = True
 
         grouped = {
             "AI": [
@@ -226,13 +234,11 @@ class TestDbInsert(unittest.TestCase):
                  "_days_away": 10, "_igs": {"AI"}},
             ]
         }
-        save_events(grouped)
+        inserted, updated = save_events(grouped)
 
-        # check that bulk_write was called
-        mock_collection.bulk_write.assert_called_once()
-        ops = mock_collection.bulk_write.call_args[0][0]
-        self.assertEqual(len(ops), 1)
-        self.assertEqual(ops[0].get_filter(), {"link": "https://test.devfolio.co"})
+        self.assertEqual(inserted, 0)
+        self.assertEqual(updated, 1)
+        mock_db.insert_event.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ Usage:
 
 import sys
 import os
+import asyncio
 
 # Add current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,4 +17,4 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.orchestrator import run_pipeline
 
 if __name__ == "__main__":
-    run_pipeline()
+    asyncio.run(run_pipeline())

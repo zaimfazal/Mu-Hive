@@ -123,19 +123,31 @@ class DatabaseFacade:
             row['link'] = row['url']
         return rows
         
-    def update_event_scrape(self, doc_id, status, scraped_page_title=None, scraped_meta_description=None, scraped_full_text=None, scrape_layer=None, scrape_error=None):
+    def update_event_scrape(self, doc_id, status, scraped_page_title=None, scraped_meta_description=None, scraped_full_text=None, scrape_layer=None, scrape_error=None, retry_count=None):
         scrape_data = {}
         if scraped_page_title: scrape_data['scraped_page_title'] = scraped_page_title
         if scraped_meta_description: scrape_data['scraped_meta_description'] = scraped_meta_description
         if scraped_full_text: scrape_data['scraped_full_text'] = scraped_full_text
         if scrape_error: scrape_data['scrape_error'] = scrape_error
+        if retry_count is not None: scrape_data['retry_count'] = retry_count
         
         return self.scrapes.update_scrape(doc_id, status, scrape_layer, scrape_data)
 
     # ----------------------------------------------------
     # New Methods for Scout and Intelligence Agents
     # ----------------------------------------------------
-    def insert_opportunity(self, title, link, summary=None, source_engine=None, ig_tags=None, category=None, is_processed=False, quality_score=None):
+    def insert_opportunity(
+        self,
+        title,
+        link,
+        summary=None,
+        source_engine=None,
+        ig_tags=None,
+        category=None,
+        is_processed=False,
+        quality_score=None,
+        metadata=None,
+    ):
         """Bridge method for scout.py"""
         if self.scrapes.link_exists(link, ig_tags[0] if ig_tags else None):
             return False
@@ -146,6 +158,8 @@ class DatabaseFacade:
             "category": category,
             "quality_score": quality_score
         }
+        if metadata:
+            data.update(metadata)
         status = "processed" if is_processed else "not processed"
         
         # Mapping ig_tags to the 'ig' column (primary IG)
@@ -187,6 +201,15 @@ class DatabaseFacade:
             
         return rows
 
+    @staticmethod
+    def _normalize_category(category):
+        normalized = str(category or "").strip().lower()
+        if normalized == "hackathons":
+            return "Hackathons"
+        if normalized == "news":
+            return "News"
+        return "News"
+
     def update_intelligence(self, item_id, score, tags, generated_summary=None, category=None, raw_score=None, score_breakdown=None, structured_metadata=None):
         """Update item after LLM evaluation."""
         with db_conn.get_cursor() as cur:
@@ -207,8 +230,8 @@ class DatabaseFacade:
             # Store LLM-generated summary if available (Bug 7 fix)
             if generated_summary:
                 data['summary'] = generated_summary
-            if category:
-                data['category'] = category
+            normalized_category = self._normalize_category(category or data.get('category'))
+            data['category'] = normalized_category
 
             # Merge structured metadata from LLM (hackathon details)
             if structured_metadata:
@@ -228,8 +251,16 @@ class DatabaseFacade:
                 if isinstance(e, psycopg2.errors.UniqueViolation) or "unique constraint" in str(e).lower():
                     import logging
                     logging.getLogger(__name__).warning(
-                        "Duplicate scraped_data entry found for URL: %s and IG: %s. Deleting duplicate row ID %s.",
+                        "Duplicate scraped_data entry found for URL: %s and IG: %s. Merging into existing row and removing duplicate ID %s.",
                         url, tags[0] if tags else 'Unknown', item_id
+                    )
+                    # Merge: update the existing row with the new score/tags, then delete the duplicate
+                    new_ig = tags[0] if tags else 'Unknown'
+                    cur.execute(
+                        """UPDATE scraped_data
+                           SET status = %s, data = %s
+                           WHERE url = %s AND ig = %s AND id != %s""",
+                        (status, json.dumps(data), url, new_ig, item_id)
                     )
                     cur.execute("DELETE FROM scraped_data WHERE id = %s", (item_id,))
                     return False
@@ -293,7 +324,7 @@ class DatabaseFacade:
                         self.events.upsert({
                             'title': title,
                             'ig': tags[0],
-                            'category': category or 'News',
+                            'category': normalized_category,
                             'summary': generated_summary,
                             'apply_link': url,
                             'validity_score': score,
@@ -313,18 +344,24 @@ class DatabaseFacade:
     def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5):
         """Fetches top-scored opportunities for a specific IG and Category from the events table."""
         query = """
-            SELECT id, title, apply_link, ig, category, summary, validity_score, platform, location, deadline, days_left, zulip_sent, created_at
-            FROM events
-            WHERE ig = %s
-            AND category = %s
-            AND (zulip_sent = FALSE OR zulip_sent IS NULL)
+            SELECT e.id, e.title, e.apply_link, e.ig, e.category, e.summary, e.validity_score, e.platform, e.location, e.deadline, e.days_left, e.zulip_sent, e.created_at, s.data->'structured_metadata' as structured_metadata
+            FROM events e
+            LEFT JOIN scraped_data s ON e.apply_link = s.url
+            WHERE e.ig = %s
+            AND e.category = %s
+            AND (e.zulip_sent = FALSE OR e.zulip_sent IS NULL)
         """
         params = [ig, category]
-        query, params = self._append_orchestrator_time_filter(query, params, column="created_at")
+        query, params = self._append_orchestrator_time_filter(query, params, column="e.created_at")
         query += """
             ORDER BY
-                validity_score DESC,
-                created_at DESC
+                e.validity_score DESC,
+                CASE
+                    WHEN s.data->>'published_at' ~ '^[0-9]+(\\.[0-9]+)?$'
+                    THEN to_timestamp((s.data->>'published_at')::double precision)
+                    ELSE e.created_at
+                END DESC,
+                e.created_at DESC
             LIMIT %s;
         """
         params.append(limit)
@@ -349,6 +386,7 @@ class DatabaseFacade:
             row['link'] = row['apply_link']
             row['source_engine'] = row['platform'] or ''
             row['category'] = row['category'] or 'Unknown'
+            row['structured_metadata'] = row.get('structured_metadata') or {}
         return rows
         
     def update_event_summary_by_link(self, link: str, summary: str):
@@ -393,5 +431,20 @@ def save_events(grouped: dict):
                 modified += 1
     return inserted, modified
 
-# Singleton instance for the application
-db = DatabaseFacade()
+class _LazyDatabaseFacade:
+    """Import-safe proxy that opens Postgres only when first used."""
+
+    def __init__(self):
+        self._instance = None
+
+    def _get_instance(self):
+        if self._instance is None:
+            self._instance = DatabaseFacade()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get_instance(), name)
+
+
+# Singleton-compatible proxy for existing scripts.
+db = _LazyDatabaseFacade()

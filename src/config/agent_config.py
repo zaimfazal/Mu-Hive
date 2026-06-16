@@ -16,7 +16,7 @@ GROQ_MODEL_NAME = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # ── Shared LLM settings (env-configurable) ──
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
 shared_model_settings = ModelSettings(
     max_tokens=MAX_TOKENS,

@@ -7,7 +7,7 @@ IG assignment, smart filling, and top-N selection.
 
 import re
 
-from src.config.constants import IG_KEYWORDS, MASTER_IGS, RELATED_IGS
+from src.config.constants import IG_KEYWORDS, MASTER_IGS, RELATED_IGS, TOP_N
 
 # ──────────────────────────────────────────────────────────
 # 2B — RARE IGs (these and ONLY these can use extended pool)
@@ -313,6 +313,14 @@ def curate(primary_events, extended_events, IG_KEYWORDS):
         x.get("days_remaining", 999),
       )
     )
-    grouped[ig] = grouped[ig][:15]
+    grouped[ig] = grouped[ig][:TOP_N]
 
   return grouped
+
+
+def process_events(events):
+  """Backward-compatible entry point for tests and older scripts."""
+  from src.scraping.data_cleaner import clean_events
+
+  primary, extended = clean_events(events)
+  return curate(primary, extended, IG_KEYWORDS)

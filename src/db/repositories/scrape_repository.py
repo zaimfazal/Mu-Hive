@@ -17,6 +17,11 @@ class ScrapeRepository:
             cur.execute("""
                 INSERT INTO scraped_data (title, url, ig, status, scraped_at, data)
                 VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (url, ig) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    scraped_at = EXCLUDED.scraped_at,
+                    data = COALESCE(scraped_data.data, '{}'::jsonb) || COALESCE(EXCLUDED.data, '{}'::jsonb)
                 RETURNING id;
             """, (title, url, ig, status, scraped_at, json_data))
             return cur.fetchone()[0]
@@ -48,7 +53,14 @@ class ScrapeRepository:
             cur.execute("""
                 INSERT INTO scraped_data (title, url, ig, source, status, data)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (url, ig) DO NOTHING
+                ON CONFLICT (url, ig) DO UPDATE SET
+                    title = COALESCE(EXCLUDED.title, scraped_data.title),
+                    source = COALESCE(EXCLUDED.source, scraped_data.source),
+                    status = CASE
+                        WHEN scraped_data.status IN ('processed', 'scraped') THEN scraped_data.status
+                        ELSE EXCLUDED.status
+                    END,
+                    data = COALESCE(scraped_data.data, '{}'::jsonb) || COALESCE(EXCLUDED.data, '{}'::jsonb)
                 RETURNING id;
             """, (title, url, ig, source_engine, status, json.dumps(data)))
             row = cur.fetchone()
@@ -57,7 +69,16 @@ class ScrapeRepository:
     @staticmethod
     def find_pending(limit=50):
         with db_conn.get_cursor(factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM scraped_data WHERE status = 'not processed' LIMIT %s;", (limit,))
+            cur.execute("""
+                SELECT * FROM scraped_data
+                WHERE status = 'not processed'
+                   OR (status = 'scrape_failed'
+                       AND COALESCE((data->>'retry_count')::int, 0) < 3)
+                ORDER BY
+                    CASE WHEN status = 'not processed' THEN 0 ELSE 1 END,
+                    scraped_at DESC
+                LIMIT %s;
+            """, (limit,))
             return cur.fetchall()
 
     @staticmethod

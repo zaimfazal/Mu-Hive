@@ -67,11 +67,11 @@ DATA_SCIENCE_RSS_FEEDS = [
 ]
 
 ALL_RSS_FEEDS = {
-    "ai": AI_RSS_FEEDS,
-    "web development": WEB_DEV_RSS_FEEDS,
-    "ui ux": UI_UX_RSS_FEEDS,
-    "cybersecurity": CYBER_SEC_RSS_FEEDS,
-    "data science": DATA_SCIENCE_RSS_FEEDS
+    "AI": AI_RSS_FEEDS,
+    "Web Development": WEB_DEV_RSS_FEEDS,
+    "UI/UX": UI_UX_RSS_FEEDS,
+    "Cyber Security": CYBER_SEC_RSS_FEEDS,
+    "Data Science": DATA_SCIENCE_RSS_FEEDS,
 }
 
 # Source priority boost for quality scoring.

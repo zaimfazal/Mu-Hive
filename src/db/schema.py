@@ -49,6 +49,34 @@ def initialize_schema():
             cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS zulip_sent BOOLEAN DEFAULT FALSE;")
             cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS deadline TEXT;")
 
+            cur.execute("""
+                DELETE FROM scraped_data a
+                USING scraped_data b
+                WHERE a.url = b.url
+                  AND COALESCE(a.ig, '') = COALESCE(b.ig, '')
+                  AND a.id < b.id;
+            """)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'scraped_data_url_ig_key'
+                    ) THEN
+                        ALTER TABLE scraped_data
+                        ADD CONSTRAINT scraped_data_url_ig_key UNIQUE (url, ig);
+                    END IF;
+                END $$;
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scraped_data_status_scraped_at
+                ON scraped_data (status, scraped_at DESC);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_events_ig_category_score
+                ON events (ig, category, validity_score DESC, created_at DESC);
+            """)
+
 
 
         print("[+] Schema initialization complete.")

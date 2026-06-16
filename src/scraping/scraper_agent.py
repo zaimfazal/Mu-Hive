@@ -9,6 +9,7 @@ from readability import Document
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 from src.db.postgres_database import DatabaseFacade
+from src.utils.ig_normalizer import normalize_ig
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -164,10 +165,18 @@ async def run_scraper_agent(limit: int = SCRAPE_LIMIT):
     db      = DatabaseFacade()
     pending = db.find_pending_scrape(limit=limit)
 
+    stats = {
+        "pending": len(pending) if pending else 0,
+        "scraped_ok": 0,
+        "scrape_failed": 0,
+        "spam_filtered": 0,
+        "scrape_layers": {"L1": 0, "Firecrawl": 0, "L2": 0},
+    }
+
     if not pending:
         logger.info("nothing to scrape.")
         db.close()
-        return
+        return stats
     
     logger.info(f"{len(pending)} doc(s) queued.")
     semaphore = asyncio.Semaphore(5)
@@ -177,22 +186,33 @@ async def run_scraper_agent(limit: int = SCRAPE_LIMIT):
             doc_id, link = doc["_id"], doc.get("link")
             logger.info(f"\n── {link}")
 
+            # Track retry count from JSONB data field
+            current_data = doc.get("data") or {}
+            retry_count = current_data.get("retry_count", 0)
+
             if not (isinstance(link, str) and link.startswith(("http://", "https://"))):
+                current_data["retry_count"] = retry_count + 1
                 db.update_event_scrape(doc_id, status="scrape_failed",
-                                       scrape_error="invalid URL")
+                                       scrape_error="invalid URL",
+                                       retry_count=current_data["retry_count"])
+                stats["scrape_failed"] += 1
                 return
                 
             SPAM_DOMAINS = ["bloguerosa.com", "qodsblog.com", "blogdeazar.com", "blazingblog.com"]
             if any(spam in link for spam in SPAM_DOMAINS):
                 logger.info("  [Skip] Spam domain filtered.")
                 db.update_event_scrape(doc_id, status="scrape_failed", scrape_error="spam domain")
+                stats["spam_filtered"] += 1
                 return
 
             result = await scrape_url(link, browser)
 
             if not result:
+                current_data["retry_count"] = retry_count + 1
                 db.update_event_scrape(doc_id, status="scrape_failed",
-                                       scrape_error="all layers failed")
+                                       scrape_error="all layers failed",
+                                       retry_count=current_data["retry_count"])
+                stats["scrape_failed"] += 1
                 return
 
             ok = db.update_event_scrape(
@@ -203,6 +223,10 @@ async def run_scraper_agent(limit: int = SCRAPE_LIMIT):
                 scraped_full_text=result["text"],
                 scrape_layer=result["layer"],
             )
+            stats["scraped_ok"] += 1
+            layer = result["layer"]
+            if layer in stats["scrape_layers"]:
+                stats["scrape_layers"][layer] += 1
             logger.info(f"  [{'saved' if ok else 'warn: no match'}:{link[:40]}] "
                         f"layer={result['layer']} words={len(result['text'].split())}")
 
@@ -213,6 +237,7 @@ async def run_scraper_agent(limit: int = SCRAPE_LIMIT):
 
     db.close()
     logger.info(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] scraper done.")
+    return stats
 
 
  # ── RSS Feed scraper ──────────────────────────────────────────────────────────
@@ -222,6 +247,16 @@ async def run_rss_agent():
     seen_urls = set()
     seen_titles: list[set] = []  # List of (word_set, title_str) for duplicate detection
     semaphore = asyncio.Semaphore(5)
+
+    stats = {
+        "feeds_processed": 0,
+        "entries_found": 0,
+        "items_inserted": 0,
+        "duplicates_skipped": 0,
+        "near_duplicates_skipped": 0,
+        "scrape_failures": 0,
+        "scrape_layers": {"L1": 0, "Firecrawl": 0, "L2": 0},
+    }
 
     SPAM_DOMAINS = ["bloguerosa.com", "qodsblog.com", "blogdeazar.com", "blazingblog.com"]
 
@@ -253,11 +288,13 @@ async def run_rss_agent():
                 feed_data = r.content
 
             feed = feedparser.parse(feed_data)
+            stats["feeds_processed"] += 1
 
             if not feed.entries:
                 logger.info(f"[RSS Skip] {feed_url} -> 0 entries returned")
                 return
 
+            stats["entries_found"] += len(feed.entries[:5])
             logger.info(f"[RSS] {feed_url} -> {len(feed.entries)} entries, processing top 5")
 
             for entry in feed.entries[:5]:
@@ -268,17 +305,20 @@ async def run_rss_agent():
                     if not link:
                         continue
                     if link in seen_urls:
+                        stats["duplicates_skipped"] += 1
                         continue
                     seen_urls.add(link)
 
                     # Near-duplicate detection across feeds
                     if _is_near_duplicate(title):
                         logger.info(f"  [Skip] Near-duplicate title: {title[:60]}")
+                        stats["near_duplicates_skipped"] += 1
                         continue
                     seen_titles.append((_title_words(title), title))
 
                     if db.link_exists(link, ig_category):
                         logger.info(f"  [Skip] Already in DB: {link[:60]}")
+                        stats["duplicates_skipped"] += 1
                         continue
 
                     logger.info(f"\n── RSS Item: {title} | {link}")
@@ -290,7 +330,13 @@ async def run_rss_agent():
                     result = await scrape_url(link, browser)
                     if not result:
                         logger.info(f"  [Fail] RSS item scrape failed: {link[:50]}")
+                        stats["scrape_failures"] += 1
                         continue
+
+                    # Track scrape layer
+                    layer = result.get("layer", "L1")
+                    if layer in stats["scrape_layers"]:
+                        stats["scrape_layers"][layer] += 1
 
                     # Build data dict with RSS summary and category for downstream agents
                     rss_summary = entry.get("summary", "")
@@ -323,17 +369,25 @@ async def run_rss_agent():
                         title, link, ig_category, "RSS", "scraped", data=item_data
                     )
                     if doc_id:
+                        stats["items_inserted"] += 1
                         logger.info(f"  [saved:{link[:40]}] "
                                     f"(RSS) layer={result['layer']} words={len(result['text'].split())}")
         except Exception as e:
             logger.info(f"[RSS Error] {feed_url} -> {e}")
 
     from src.config.sources import ALL_RSS_FEEDS
+
+    # Normalize IG categories from sources.py as safety net
+    normalized_feeds = {}
+    for ig_key, feeds in ALL_RSS_FEEDS.items():
+        canonical = normalize_ig(ig_key) or ig_key
+        normalized_feeds[canonical] = feeds
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         logger.info("\n--- Scraping RSS Feeds ---")
         tasks = []
-        for ig_category, feeds in ALL_RSS_FEEDS.items():
+        for ig_category, feeds in normalized_feeds.items():
             for feed_url in feeds:
                 tasks.append(process_rss_feed(feed_url, browser, ig_category))
         await asyncio.gather(*tasks)
@@ -341,6 +395,7 @@ async def run_rss_agent():
 
     db.close()
     logger.info(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] RSS scraper done.")
+    return stats
 
 
 if __name__ == "__main__":

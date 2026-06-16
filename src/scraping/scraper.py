@@ -367,9 +367,16 @@ async def run_scraper_pipeline() -> dict[str, list[Event]]:
                     eventName=name.strip(),
                     registrationLink=link.strip(),
                     startDate=e.get("startDate", "TBA"),
+                    endDate=e.get("endDate", "TBA"),
                     location=e.get("location"),
                     platform=e.get("platform"),
                     days_remaining=e.get("days_remaining", e.get("_days_remaining")),
+                    prizePool=e.get("prizePool"),
+                    cost=e.get("cost"),
+                    eligibility=e.get("eligibility"),
+                    tags=e.get("tags") if isinstance(e.get("tags"), list) else [],
+                    score=e.get("score", e.get("_score")),
+                    eventType=e.get("eventType", e.get("_event_type")),
                 )
                 final_output[ig].append(event_obj)
                 total_valid += 1
