@@ -32,42 +32,67 @@ def send_email(subject, body, receiver):
 
 def run_email_agent():
     logger.info("Email Agent starting...")
-    
+
+    # Verify SMTP credentials are configured
+    sender = os.getenv("GMAIL_SENDER")
+    password = os.getenv("GMAIL_APP_PASSWORD")
+    if not sender or not password:
+        logger.error(
+            "GMAIL_SENDER or GMAIL_APP_PASSWORD not set in .env — cannot send emails."
+        )
+        return
+
     # Database connection
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         logger.warning("DATABASE_URL not found in .env. Checking local defaults...")
         db_url = "dbname=mu_hive user=postgres password=postgres host=localhost"
-    
+
+    conn = None
+    cursor = None
+    emails_sent = 0
+
     try:
         conn = psycopg2.connect(db_url)
         conn.autocommit = True
         cursor = conn.cursor(cursor_factory=DictCursor)
-        
+
         # Fetch IG to email mappings
         cursor.execute("SELECT ig, email FROM ig_mails")
         ig_email_records = cursor.fetchall()
-        
+
         if not ig_email_records:
-            logger.info("No email mappings found in the 'ig_mails' table.")
+            logger.warning(
+                "No email mappings found in the 'ig_mails' table. "
+                "Insert rows (ig, email) to enable email delivery."
+            )
             return
-        
+
+        logger.info("Found %d IG→email mappings in ig_mails.", len(ig_email_records))
+
         for record in ig_email_records:
             raw_ig = record['ig']
             email = record['email']
-            
+
+            # Normalise IG name; fall back to the raw value when it is already
+            # a canonical name that normalize_ig doesn't list as an alias.
             from src.utils.ig_normalizer import normalize_ig
             ig = normalize_ig(raw_ig)
             if not ig:
-                logger.warning(f"Invalid IG mapping in ig_mails: '{raw_ig}'")
-                continue
-            
-            # Fetch unsent News for this IG (ordered by validity_score, limit 20)
+                # The raw value may already be a canonical IG name stored
+                # directly in the events table — use it as-is.
+                ig = raw_ig.strip()
+                logger.info(
+                    "IG '%s' not in normalizer alias list; using raw value '%s'.",
+                    raw_ig, ig,
+                )
+
+            # Fetch unsent News for this IG (case-insensitive, ordered by validity_score, limit 20)
             cursor.execute(
                 """
                 SELECT id, category, summary, apply_link, platform, location, deadline
                 FROM events
-                WHERE ig = %s
+                WHERE LOWER(ig) = LOWER(%s)
                     AND category = 'News'
                     AND mail_sent = FALSE
                 ORDER BY validity_score DESC, created_at DESC
@@ -77,12 +102,12 @@ def run_email_agent():
             )
             news_events = cursor.fetchall()
 
-            # Fetch unsent Hackathons for this IG (ordered by validity_score, limit 20)
+            # Fetch unsent Hackathons for this IG (case-insensitive, ordered by validity_score, limit 20)
             cursor.execute(
                 """
                 SELECT id, category, summary, apply_link, platform, location, deadline
                 FROM events
-                WHERE ig = %s
+                WHERE LOWER(ig) = LOWER(%s)
                     AND category = 'Hackathons'
                     AND mail_sent = FALSE
                 ORDER BY validity_score DESC, created_at DESC
@@ -93,11 +118,18 @@ def run_email_agent():
             hack_events = cursor.fetchall()
 
             events = news_events + hack_events
-            
+
             if not events:
-                logger.info("[%s] No events, skipping.", ig)
+                logger.info(
+                    "[%s] No unsent events found (News: 0, Hackathons: 0). Skipping.", ig
+                )
                 continue
-            
+
+            logger.info(
+                "[%s] Found %d unsent events (News: %d, Hackathons: %d). Building email for %s.",
+                ig, len(events), len(news_events), len(hack_events), email,
+            )
+
             # Build email body, grouping by category
             body_parts = []
             current_category = None
@@ -130,17 +162,31 @@ def run_email_agent():
                     f"{link_label}: <a href='{link}'>{link}</a><br><br>"
                 )
                 body_parts.append(event_html)
-            
+
             # Join sections with a horizontal rule
             body = "<hr>".join(body_parts)
-            
+
             # Send the email
-            send_email(
-                subject=f"{ig.title()} Digest",
-                body=body,
-                receiver=email,
-            )
-            
+            try:
+                send_email(
+                    subject=f"{ig.title()} Digest",
+                    body=body,
+                    receiver=email,
+                )
+                emails_sent += 1
+            except smtplib.SMTPAuthenticationError as e:
+                logger.error(
+                    "SMTP authentication failed — check GMAIL_APP_PASSWORD in .env. "
+                    "Error: %s", e,
+                )
+                raise  # Fatal — no point trying the remaining IGs
+            except smtplib.SMTPException as e:
+                logger.error(
+                    "[%s] SMTP error sending to %s: %s. Continuing with next IG.",
+                    ig, email, e,
+                )
+                continue
+
             # Mark events as sent
             event_ids = tuple([e['id'] for e in events])
             if event_ids:
@@ -148,16 +194,23 @@ def run_email_agent():
                     "UPDATE events SET mail_sent = TRUE WHERE id IN %s",
                     (event_ids,)
                 )
-    
+                logger.info("[%s] Marked %d events as mail_sent=TRUE.", ig, len(event_ids))
+
+    except psycopg2.Error as e:
+        logger.error("Email Agent database error: %s", e)
+        raise
+    except smtplib.SMTPException:
+        raise  # Already logged above
     except Exception as e:
-        logger.error("Email Agent PostgreSQL error: %s", e)
+        logger.error("Email Agent unexpected error: %s", e, exc_info=True)
+        raise
     finally:
-        if 'cursor' in locals():
+        if cursor is not None:
             cursor.close()
-        if 'conn' in locals():
+        if conn is not None:
             conn.close()
-    
-    logger.info("Email Agent done.")
+
+    logger.info("Email Agent done. Sent %d digest email(s).", emails_sent)
 
 if __name__ == "__main__":
     run_email_agent()

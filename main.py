@@ -26,13 +26,22 @@ async def main():
 
     try:
         await run_pipeline()
-
-        run_email_agent()
-        await run_zulip_notifications()
     except LLMFailureThresholdExceeded:
         raise
     except Exception as e:
-        print(f"❌ Notification failed: {e}")
+        print(f"❌ Pipeline failed: {e}")
+
+    # Email agent — isolated so a failure doesn't block Zulip
+    try:
+        run_email_agent()
+    except Exception as e:
+        print(f"❌ Email sending failed: {e}")
+
+    # Zulip notifications — isolated so a failure doesn't mask email results
+    try:
+        await run_zulip_notifications()
+    except Exception as e:
+        print(f"❌ Zulip notifications failed: {e}")
 
     print("🏁 Task Complete.\n")
 
