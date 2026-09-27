@@ -1,0 +1,393 @@
+# Central Interest Group Configuration for Mu-Hive
+# Allows adding/modifying IGs without changing code.
+
+interest_groups:
+  - id: "ai"
+    name: "AI"
+    description: "Artificial intelligence, core machine learning, deep neural networks, computer vision, AI agents, foundation models."
+    keywords: ["artificial intelligence", " ai ", "ai challenge", "neural network", "deep learning", "computer vision", "ai agent", "autonomous ai", "ai platform", "intelligent system", "machine learning", " ml ", "nlp", "transformer"]
+    aliases: ["ai", "artificial intelligence", "ml", "machine learning"]
+    search_queries:
+      news: ["artificial intelligence AI breakthroughs 2026", "machine learning model releases"]
+      hackathons: ["AI machine learning hackathon 2026"]
+    negative_indicators: ["malware", "phishing", "ransomware", "semiconductor manufacturing"]
+    is_active: true
+    zulip_channel: "AI IG"
+    email: "ai-digest@mulearn.org"
+
+  - id: "generative_ai"
+    name: "Generative AI"
+    description: "LLMs, diffusion models, generative media, text-to-image/video, prompt engineering, conversational AI agents."
+    keywords: ["generative", "llm", "gpt", "diffusion", "text-to-image", "stable diffusion", "prompt engineering", "genai", "gemini", "openai", "llama", "mistral", "chatbot", "foundation model"]
+    aliases: ["generative ai", "gen ai", "genai", "llm"]
+    search_queries:
+      news: ["generative AI LLM updates 2026", "diffusion models news"]
+      hackathons: ["Generative AI hackathon GenAI"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "AI IG"
+    email: null
+
+  - id: "data_science"
+    name: "Data Science"
+    description: "Statistical modeling, exploratory data analysis, Kaggle competitions, data pipelines, predictive modeling, statistics."
+    keywords: ["data science", "datathon", "eda", "pandas", "statistics", "dataset", "jupyter", "kaggle", "big data", "etl", "data pipeline", "scikit learn"]
+    aliases: ["data science", "datascience"]
+    search_queries:
+      news: ["data science analytics trends 2026", "data science machine learning news"]
+      hackathons: ["data science Kaggle hackathon 2026"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Data Science IG"
+    email: "ds-digest@mulearn.org"
+
+  - id: "data_analytics"
+    name: "Data Analytics"
+    description: "Business intelligence, dashboards, Tableau, Power BI, metric reporting, data visualization, business insights."
+    keywords: ["data analytics", "data visualization", "analytics", "business intelligence", "dashboard", "tableau", "power bi", "bi challenge"]
+    aliases: ["data analytics", "analytics", "bi"]
+    search_queries:
+      news: ["data analytics business intelligence trends"]
+      hackathons: ["data analytics visualization challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Data Science IG"
+    email: null
+
+  - id: "web_development"
+    name: "Web Development"
+    description: "Frontend and backend development, JavaScript/TypeScript, React, Next.js, Node.js, Python web frameworks, web standards, APIs."
+    keywords: ["web", "frontend", "backend", "fullstack", "full stack", "react", "node", "django", "flask", "html", "css", "javascript", "typescript", "nextjs", "vue", "api", "rest", "graphql"]
+    aliases: ["web development", "web dev", "frontend", "backend", "fullstack"]
+    search_queries:
+      news: ["web development JavaScript React framework news 2026", "frontend backend web dev trends"]
+      hackathons: ["web development hackathon frontend backend 2026"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Web Dev IG"
+    email: "web-digest@mulearn.org"
+
+  - id: "cyber_security"
+    name: "Cyber Security"
+    description: "Information security, ethical hacking, CTF challenges, vulnerability research, zero-days, threat intelligence, malware analysis, pentesting."
+    keywords: ["cyber", "security", "ctf", "capture the flag", "vulnerability", "pentest", "bug bounty", "ethical hacking", "cybersecurity", "infosec", "exploit", "malware", "network security", "devsecops", "owasp", "siem"]
+    aliases: ["cyber security", "cybersecurity", "infosec"]
+    search_queries:
+      news: ["cybersecurity vulnerability zero-day threat 2026", "infosec security breach advisory news"]
+      hackathons: ["CTF capture the flag cybersecurity hackathon 2026"]
+    negative_indicators: ["eco", "sustainable", "sustainability", "climate", "environment", "green"]
+    is_active: true
+    zulip_channel: "Cyber Security IG"
+    email: "cyber-digest@mulearn.org"
+
+  - id: "ui_ux"
+    name: "UI/UX"
+    description: "User interface and user experience design, Figma, interaction design, wireframing, design systems, usability research."
+    keywords: ["ui", "ux", "ui/ux", "figma", "wireframe", "prototype", "design thinking", "user experience", "interface design", "designathon", "product design", "interaction design", "usability"]
+    aliases: ["ui/ux", "ui ux", "ui", "ux"]
+    search_queries:
+      news: ["UX design trends user experience 2026", "Figma UI design product design updates"]
+      hackathons: ["UI UX design hackathon designathon 2026"]
+    negative_indicators: ["hardware design", "civil design", "interior design"]
+    is_active: true
+    zulip_channel: "UI UX IG"
+    email: "uiux-digest@mulearn.org"
+
+  - id: "mobile_development"
+    name: "Mobile Development"
+    description: "iOS, Android, React Native, Flutter, Swift, Kotlin, cross-platform mobile apps, mobile architectures."
+    keywords: ["android", "ios", "flutter", "react native", "mobile app", "swift", "kotlin", "mobile development", "app development", "cross platform"]
+    aliases: ["mobile development", "mobile dev", "android", "ios"]
+    search_queries:
+      news: ["mobile app development flutter kotlin swift 2026"]
+      hackathons: ["mobile app development hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Mobile Dev IG"
+    email: null
+
+  - id: "devops"
+    name: "Devops"
+    description: "CI/CD pipelines, Docker, Kubernetes, cloud platforms (AWS/Azure/GCP), Terraform, infrastructure as code, SRE, monitoring."
+    keywords: ["devops", "ci/cd", "docker", "deployment", "pipeline", "kubernetes", "cloud", "aws", "azure", "gcp", "terraform", "helm", "sre", "observability"]
+    aliases: ["devops", "cloud", "sre"]
+    search_queries:
+      news: ["DevOps cloud engineering Kubernetes Docker trends"]
+      hackathons: ["DevOps cloud hackathon challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "DevOps IG"
+    email: null
+
+  - id: "blockchain"
+    name: "Blockchain"
+    description: "Web3, smart contracts, Ethereum, Solana, Solidity, DeFi, EVM, zero-knowledge proofs, decentralized protocols."
+    keywords: ["blockchain", "web3", "smart contract", "solidity", "crypto", "ethereum", "polygon", "decentralized", "dapp", "layer 2", "evm", "onchain"]
+    aliases: ["blockchain", "web3", "crypto"]
+    search_queries:
+      news: ["blockchain web3 smart contracts news 2026"]
+      hackathons: ["Web3 blockchain hackathon 2026"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Blockchain IG"
+    email: null
+
+  - id: "product_management"
+    name: "Product Management"
+    description: "Product strategy, roadmap planning, user research, product teardowns, metrics, spec writing, feature prioritization."
+    keywords: ["product management", "product manager", "product strategy", "product thinking", "product teardown", "roadmap", "pm challenge"]
+    aliases: ["product management", "pm"]
+    search_queries:
+      news: ["product management strategy tech product trends"]
+      hackathons: ["product management teardown challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Product IG"
+    email: null
+
+  - id: "game_dev"
+    name: "Game Dev"
+    description: "Game development, Unity, Unreal Engine, game physics, 2D/3D graphics, game jams, indie game creation."
+    keywords: ["game", "game jam", "unity", "unreal", "pygame", "game dev", "game design", "2d game", "3d game", "game engine", "level design"]
+    aliases: ["game dev", "game development", "gamedev"]
+    search_queries:
+      news: ["game development Unity Unreal trends"]
+      hackathons: ["game jam hackathon 2026"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Game Dev IG"
+    email: null
+
+  - id: "no_or_low_code"
+    name: "No Or Low Code"
+    description: "No-code and low-code platforms, Bubble, Webflow, Zapier, Make, visual application builders, rapid prototyping."
+    keywords: ["no code", "low code", "nocode", "lowcode", "bubble", "webflow", "zapier", "airtable", "glide", "appsmith", "visual programming"]
+    aliases: ["no or low code", "no code", "low code", "nocode"]
+    search_queries:
+      news: ["no code low code platform trends"]
+      hackathons: ["no code hackathon challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "NoCode IG"
+    email: null
+
+  - id: "entrepreneurship"
+    name: "Entrepreneurship"
+    description: "Startups, pitch competitions, venture funding, incubator/accelerator programs, business models, founder advice."
+    keywords: ["startup", "ideathon", "pitch", "venture", "business plan", "entrepreneurship", "founder", "incubation", "seed", "pitch deck"]
+    aliases: ["entrepreneurship", "startups"]
+    search_queries:
+      news: ["tech startup funding venture news"]
+      hackathons: ["startup pitch ideathon 2026"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "Entrepreneurship IG"
+    email: null
+
+  - id: "ar_vr_mr"
+    name: "Ar Vr Mr"
+    description: "Augmented, virtual, and mixed reality, spatial computing, VisionOS, Meta Quest, 3D immersive interfaces."
+    keywords: ["augmented reality", "virtual reality", " ar ", " vr ", " xr ", "spatial computing", "immersive", "extended reality", "spatial experience"]
+    aliases: ["ar vr mr", "ar/vr", "ar vr", "xr"]
+    search_queries:
+      news: ["AR VR spatial computing trends"]
+      hackathons: ["AR VR mixed reality hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "AR/VR IG"
+    email: null
+
+  - id: "space"
+    name: "Space"
+    description: "Space technology, satellites, aerospace engineering, rocketry, astrophysics, ISRO, NASA, orbital systems."
+    keywords: ["space", "satellite", "nasa", "aerospace", "orbital", "rocketry", "astrophysics", "spacetech", "cosmos", "isro", "space exploration"]
+    aliases: ["space", "aerospace", "spacetech"]
+    search_queries:
+      news: ["space tech satellite aerospace news"]
+      hackathons: ["space tech challenge hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "quantum_computing"
+    name: "Quantum Computing"
+    description: "Quantum algorithms, qubits, Qiskit, quantum superposition, quantum machine learning, quantum error correction."
+    keywords: ["quantum", "qubit", "qiskit", "quantum circuit", "quantum ml", "quantum computing", "quantum algorithm", "quantum physics"]
+    aliases: ["quantum computing", "quantum"]
+    search_queries:
+      news: ["quantum computing hardware algorithms news"]
+      hackathons: ["quantum computing challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "iot_and_robotics"
+    name: "Internet Of Things (IOT) And Robotics"
+    description: "Embedded systems, microcontrollers, Raspberry Pi, Arduino, sensors, robotics, automation, ROS, hardware-software integration."
+    keywords: ["iot", "internet of things", "hardware", "raspberry pi", "arduino", "robotics", "embedded", "sensors", "microcontroller", "mechatronics", "drone", "robot"]
+    aliases: ["internet of things (iot) and robotics", "internet of things", "iot", "robotics"]
+    search_queries:
+      news: ["IoT robotics embedded hardware news"]
+      hackathons: ["IoT robotics hardware hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "IoT IG"
+    email: null
+
+  - id: "dsa"
+    name: "Data Structures and Algorithm"
+    description: "Competitive programming, LeetCode, Codeforces, algorithmic challenges, graph theory, dynamic programming."
+    keywords: ["data structures", "algorithm", "competitive programming", "codeforces", "leetcode", "coding contest", "dsa", "dynamic programming", "graph algorithm"]
+    aliases: ["data structures and algorithm", "dsa", "competitive programming"]
+    search_queries:
+      news: ["competitive programming algorithms contest"]
+      hackathons: ["competitive programming coding contest"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: "DSA IG"
+    email: null
+
+  - id: "quality_assurance"
+    name: "Quality Assurance"
+    description: "Software testing, QA automation, Selenium, Playwright testing, unit/integration testing, test engineering."
+    keywords: ["quality assurance", " qa ", "testing", "test automation", "software testing", "selenium", "test case", "code quality"]
+    aliases: ["quality assurance", "qa"]
+    search_queries:
+      news: ["software QA testing automation news"]
+      hackathons: ["software testing bug hunt hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "digital_marketing"
+    name: "Digital Marketing"
+    description: "SEO, growth hacking, content strategy, marketing analytics, social campaigns, digital ads."
+    keywords: ["marketing", "seo", "campaigns", "content marketing", "growth hacking", "digital marketing", "advertising"]
+    aliases: ["digital marketing", "marketing"]
+    search_queries:
+      news: ["digital marketing SEO growth trends"]
+      hackathons: ["digital marketing challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "human_resources"
+    name: "Human Resources"
+    description: "HR technology, talent acquisition, people analytics, workforce management, organizational culture."
+    keywords: ["human resources", " hr ", "people management", "talent", "recruitment", "workforce", "people ops", "people analytics"]
+    aliases: ["human resources", "hr"]
+    search_queries:
+      news: ["HR tech human resources talent trends"]
+      hackathons: ["HR tech innovation challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "project_management"
+    name: "Project Management"
+    description: "Agile, Scrum, sprint planning, project delivery, Jira, waterfall, project risk management."
+    keywords: ["project management", "project manager", "pmp", "agile", "scrum", "sprint planning", "delivery management"]
+    aliases: ["project management"]
+    search_queries:
+      news: ["project management agile scrum trends"]
+      hackathons: ["project management challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "strategic_leadership"
+    name: "Strategic Leadership"
+    description: "Corporate strategy, business case studies, executive decision-making, sustainability leadership, policy impact."
+    keywords: ["strategic", "leadership", "strategy", "business strategy", "case study", "case competition", "consulting", "decision making"]
+    aliases: ["strategic leadership", "leadership"]
+    search_queries:
+      news: ["strategic leadership business strategy trends"]
+      hackathons: ["business case competition strategy"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "creative_design"
+    name: "Creative Design"
+    description: "Graphic design, visual arts, branding, illustration, motion graphics, typography, creative advertising."
+    keywords: ["creative design", "illustration", "visual design", "branding", "graphic design", "motion design", "typography", "poster design"]
+    aliases: ["creative design"]
+    search_queries:
+      news: ["graphic design creative branding trends"]
+      hackathons: ["creative design visual art challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "beckn"
+    name: "Beckn"
+    description: "Beckn protocol, ONDC, open commerce protocols, decentralized interoperable networks."
+    keywords: ["beckn", "ondc", "open network", "interoperability", "decentralized commerce", "beckn protocol", "open commerce"]
+    aliases: ["beckn", "ondc"]
+    search_queries:
+      news: ["Beckn protocol ONDC open network news"]
+      hackathons: ["Beckn protocol ONDC hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "civil"
+    name: "Civil"
+    description: "Civil engineering, smart cities, urban infrastructure, sustainable construction, environmental engineering."
+    keywords: ["civil", "construction", "structural", "civil engineering", "bridge design", "building design", "urban infrastructure"]
+    aliases: ["civil", "civil engineering"]
+    search_queries:
+      news: ["civil engineering infrastructure tech trends"]
+      hackathons: ["civil engineering smart city hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "comics"
+    name: "Comics"
+    description: "Digital comics, manga, webcomics, visual storytelling, character design, storyboards."
+    keywords: ["comics", "comic", "manga", "illustration", "storytelling", "graphic novel", "cartoon", "storyboard", "webcomic"]
+    aliases: ["comics", "comic"]
+    search_queries:
+      news: ["digital comics webtoons visual storytelling"]
+      hackathons: ["comic creation storytelling contest"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "muv"
+    name: "MuV"
+    description: "Filmmaking, short films, video editing, cinema arts, media production, theatre, performing arts."
+    keywords: ["media", "visual arts", "short film", "reel", "storytelling", "acting", "performance", "filmmaking", "vlog", "screenplay", "documentary"]
+    aliases: ["muv", "media"]
+    search_queries:
+      news: ["independent film media production trends"]
+      hackathons: ["short film video creation challenge"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null
+
+  - id: "general_tech"
+    name: "General Tech"
+    description: "Broad technology news, computing innovations, cross-disciplinary tech breakthroughs not fitting specific niches."
+    keywords: ["technology", "tech news", "computing"]
+    aliases: ["general tech", "general"]
+    search_queries:
+      news: ["technology industry breakthroughs computing 2026"]
+      hackathons: ["general tech open hackathon"]
+    negative_indicators: []
+    is_active: true
+    zulip_channel: null
+    email: null

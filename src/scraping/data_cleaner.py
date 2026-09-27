@@ -191,8 +191,11 @@ def clean_events(events: list[dict], use_ai: bool = False):
         title = event.get("eventName", "").lower().strip()
         if not title or title in {"unknown", "tba", "n/a", "none"}:
             continue
-        BAD_TITLES = ["test", "demo", "untitled", "sample"]
-        if any(bad in title for bad in BAD_TITLES):
+        # --- reject bad titles (word-boundary match: allows 'contest', 'latest', 'testnet') ---
+        BAD_TITLE_PATTERN = re.compile(r"\b(?:test|demo|untitled|sample|dummy)\b", re.IGNORECASE)
+        if BAD_TITLE_PATTERN.search(title):
+            # Check if this is a known test fixture in test suite or dummy entry
+            # Still reject placeholder names like 'demo', 'test event', 'untitled'
             continue
 
         # --- reject missing link ---

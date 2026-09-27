@@ -53,5 +53,12 @@ IG_CANONICAL = {
 def normalize_ig(raw: str) -> str | None:
     if not raw:
         return None
+    try:
+        from src.config.interest_groups import registry
+        res = registry.normalize(raw)
+        if res:
+            return res
+    except Exception:
+        pass
     key = raw.strip().lower()
     return IG_CANONICAL.get(key, None)

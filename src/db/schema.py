@@ -75,6 +75,21 @@ def initialize_schema():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_events_ig_category_score
                 ON events (ig, category, validity_score DESC, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS event_interest_groups (
+                    event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+                    ig_name TEXT NOT NULL,
+                    PRIMARY KEY (event_id, ig_name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_event_igs_name
+                ON event_interest_groups (ig_name);
+
+                -- Backfill existing single-IG events into junction table
+                INSERT INTO event_interest_groups (event_id, ig_name)
+                SELECT id, ig FROM events
+                WHERE ig IS NOT NULL AND ig != ''
+                ON CONFLICT (event_id, ig_name) DO NOTHING;
             """)
 
 

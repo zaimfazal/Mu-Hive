@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, patch
 def _make_event(**kwargs) -> dict:
     """Return a minimal canonical event dict with overridable fields."""
     base = {
-        "eventName":        "Test Hackathon",
+        "eventName":        "AI Hackathon",
         "platform":         "Devfolio",
         "registrationLink": "https://test.devfolio.co",
         "startDate":        "TBA",
