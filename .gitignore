@@ -6,6 +6,9 @@ __pycache__/
 .idea/
 .vscode/
 
+# Agent scratch / local assistant state (never commit)
+.gemini/
+
 # Environments
 .env
 .venv

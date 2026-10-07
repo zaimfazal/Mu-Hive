@@ -228,10 +228,23 @@ def run_communicator():
 
     stats = {
         "igs_with_content": 0,
+        "igs_configured": 0,
+        "igs_skipped": 0,
         "total_items_displayed": 0,
         "by_ig": {},
         "by_category": {},
     }
+
+    try:
+        from src.config.interest_groups import registry
+        from src.config.settings import MAX_IGS_PER_RUN
+        from src.config.interest_groups import apply_ig_cap
+        _configured = registry.all_active_names()
+        _kept, _skipped = apply_ig_cap(_configured, MAX_IGS_PER_RUN)
+        stats["igs_configured"] = len(_configured)
+        stats["igs_skipped"] = len(_skipped)
+    except Exception:
+        pass
 
     if not digests:
         logger.warning("No opportunities passed quality threshold (score >= 6). Nothing to display.")

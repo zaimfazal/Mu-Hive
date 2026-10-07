@@ -52,11 +52,70 @@ def _validity_from_curated_score(score: int | None) -> int:
     return 5
 
 
-def _fallback_summary(title: str, ig: str, platform: str | None, location: str | None, days_left: int | None) -> str:
-    place = location or "Online"
-    source = f" on {platform}" if platform else ""
-    timing = f" with {days_left} day(s) left" if days_left is not None else ""
-    return f"{title} is a {ig}-relevant hackathon{source} hosted {place}{timing}."
+_MISSING_SUMMARY_TOKENS = {"", "n/a", "na", "tba", "unknown", "none", "null"}
+
+
+def _is_summary_value(value: object) -> bool:
+    """True when a metadata value is worth rendering (not blank/placeholder)."""
+    if value is None:
+        return False
+    text = str(value).strip()
+    return bool(text) and text.lower() not in _MISSING_SUMMARY_TOKENS
+
+
+def _fallback_summary(
+    title: str,
+    ig: str,
+    platform: str | None = None,
+    location: str | None = None,
+    days_left: int | None = None,
+    description: str | None = None,
+    deadline: str | None = None,
+    prize: str | None = None,
+) -> str:
+    """Build a deterministic hackathon summary from structured metadata.
+
+    Omits any field that is missing or a placeholder instead of rendering
+    "None", "Unknown", or empty labels.
+    """
+    has_title = _is_summary_value(title)
+    has_ig = _is_summary_value(ig)
+    clean_title = str(title).strip() if has_title else ""
+    clean_ig = str(ig).strip() if has_ig else ""
+
+    if clean_title and clean_ig:
+        head = f"{clean_title} is a {clean_ig}-relevant hackathon"
+    elif clean_title:
+        head = f"{clean_title} is a hackathon"
+    elif clean_ig:
+        head = f"A {clean_ig}-relevant hackathon"
+    else:
+        head = "A hackathon"
+
+    if _is_summary_value(platform):
+        head += f" on {str(platform).strip()}"
+    if _is_summary_value(location):
+        head += f" hosted {str(location).strip()}"
+    if days_left is not None:
+        try:
+            days = int(days_left)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            days = None
+        if days is not None and days >= 0:
+            head += f" with {days} day(s) left"
+    if _is_summary_value(deadline):
+        head += f", deadline {str(deadline).strip()}"
+    if _is_summary_value(prize):
+        head += f", prize {str(prize).strip()}"
+    head += "."
+
+    if _is_summary_value(description):
+        desc = " ".join(str(description).split())
+        if len(desc) > 200:
+            desc = desc[:197].rsplit(" ", 1)[0] + "..."
+        head += f" {desc}"
+
+    return head
 
 
 def _ensure_events_schema() -> None:
@@ -112,6 +171,18 @@ def _ensure_events_schema() -> None:
                 END IF;
             END $$;
         """)
+        # Junction table safety net (canonical DDL + backfill live in schema.py).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS event_interest_groups (
+                event_id INTEGER REFERENCES events(id) ON DELETE CASCADE,
+                ig_name TEXT NOT NULL,
+                PRIMARY KEY (event_id, ig_name)
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_event_igs_name
+            ON event_interest_groups (ig_name);
+        """)
 
 
 def _upsert_event_without_constraint(
@@ -126,46 +197,28 @@ def _upsert_event_without_constraint(
     days_left: int | None = None,
     deadline: str | None = None,
 ) -> int:
-    now = datetime.now(timezone.utc)
-    with db_conn.get_cursor() as cur:
-        cur.execute(
-            "SELECT id FROM events WHERE apply_link = %s ORDER BY id DESC LIMIT 1;",
-            (apply_link,),
-        )
-        existing = cur.fetchone()
+    """Upsert one canonical event row by apply_link (race-safe).
 
-        if existing:
-            cur.execute(
-                """
-                UPDATE events
-                SET title = %s,
-                    ig = %s,
-                    category = %s,
-                    summary = %s,
-                    validity_score = %s,
-                    platform = %s,
-                    location = %s,
-                    days_left = %s,
-                    deadline = %s,
-                    updated_at = %s
-                WHERE id = %s;
-                """,
-                (title, ig, "Hackathons", summary, validity_score, platform, location, days_left, deadline, now, existing[0]),
-            )
-            return existing[0]
+    Delegates to EventRepository.upsert, whose single INSERT ... ON CONFLICT
+    (apply_link) statement is atomic under concurrent writers (the previous
+    SELECT-then-INSERT lost races with UniqueViolation). Junction memberships
+    for [ig] are synced in the same cursor. mail_sent/zulip_sent untouched.
+    """
+    from src.db.repositories.event_repository import EventRepository
 
-        cur.execute(
-            """
-            INSERT INTO events (
-                title, ig, category, summary, apply_link, validity_score,
-                platform, location, days_left, deadline, updated_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-            """,
-            (title, ig, "Hackathons", summary, apply_link, validity_score, platform, location, days_left, deadline, now),
-        )
-        return cur.fetchone()[0]
+    return EventRepository.upsert({
+        "title": title,
+        "ig": ig,
+        "ig_names": [ig],
+        "category": "Hackathons",
+        "summary": summary,
+        "apply_link": apply_link,
+        "validity_score": validity_score,
+        "platform": platform,
+        "location": location,
+        "days_left": days_left,
+        "deadline": deadline,
+    })
 
 
 async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str, int]:
@@ -176,15 +229,6 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
     Hackathons from the API already have structured metadata, so we generate
     summaries directly here (no scraping needed) and mark them as processed.
     """
-    import asyncio
-
-    summarizer_agent = None
-    try:
-        from src.agents.summarizer import summarizer_agent as _summarizer_agent
-        summarizer_agent = _summarizer_agent
-    except BaseException as e:
-        logger.warning("Summarizer unavailable; using deterministic hackathon summaries: %s", e)
-
     db = DatabaseFacade()
     _ensure_events_schema()
     inserted_scraped = 0
@@ -226,25 +270,17 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
                 "Tags": ", ".join(event.get("tags", []) or []),
             }
 
-            # ── Generate summary from structured API metadata ──
-            summary = _fallback_summary(title, normalized_ig, platform, location, days_left)
-            if summarizer_agent is not None:
-                try:
-                    summary_prompt = (
-                        f"Title: {title}\n"
-                        f"Category: Hackathons\n"
-                        f"Interest Group: {normalized_ig}\n"
-                        f"Platform: {platform or 'N/A'}\n"
-                        f"Location: {location or 'Online'}\n"
-                        f"Start Date: {start_date_fallback or 'TBA'}\n"
-                        f"End Date: {end_date or 'TBA'}\n"
-                        f"Days Left: {days_left or 'N/A'}\n\n"
-                        "Write a crisp 1-sentence summary."
-                    )
-                    result = await summarizer_agent.run(summary_prompt)
-                    summary = result.output.summary
-                except Exception as e:
-                    logger.warning(f"Summarizer failed for '{title}': {e}")
+            # ── Deterministic summary from structured API metadata (no LLM call) ──
+            summary = _fallback_summary(
+                title,
+                normalized_ig,
+                platform,
+                location,
+                days_left,
+                description=event.get("description"),
+                deadline=deadline,
+                prize=event.get("prizePool"),
+            )
             try:
                 inserted = db.insert_opportunity(
                     title=title,
@@ -293,10 +329,6 @@ async def save_orchestrator_events(grouped_events: dict[str, list]) -> dict[str,
                         "UPDATE scraped_data SET status = 'not processed' WHERE url = %s AND status = 'processed'",
                         (link,)
                     )
-
-            # Throttle to avoid rate limits
-            if summary:
-                await asyncio.sleep(1)
 
     db.close()
     return {

@@ -323,11 +323,15 @@ class DatabaseFacade:
                             days_left_val = None
                 # Skip if event already exists (apply_link unique)
                 cur.execute("SELECT id FROM events WHERE apply_link = %s", (url,))
-                if not cur.fetchone():
+                existing_event = cur.fetchone()
+                if not existing_event:
                     try:
                         self.events.upsert({
                             'title': title,
                             'ig': tags[0],
+                            # Full validated memberships for the junction table;
+                            # legacy events.ig keeps tags[0] for compatibility.
+                            'ig_names': list(tags),
                             'category': normalized_category,
                             'summary': final_summary,
                             'apply_link': url,
@@ -342,12 +346,33 @@ class DatabaseFacade:
                         logging.getLogger(__name__).error(
                             "Events upsert failed for %s: %s", url, evt_err
                         )
+                else:
+                    # Event row already canonical: refresh junction memberships
+                    # so re-classification drops stale IGs (legacy row untouched).
+                    try:
+                        self.events.sync_interest_groups(cur, existing_event[0], tags)
+                    except Exception as evt_err:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            "Event IG sync failed for %s: %s", url, evt_err
+                        )
             
             return cur.rowcount > 0
 
-    def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5, include_sent=True):
+    def get_top_opportunities_by_ig_and_category(self, ig, category, limit=5, include_sent=True,
+                                                     pending_ig=None, pending_channel=None):
         """Fetches top-scored opportunities for a specific IG and Category from the events table.
-        Uses DISTINCT ON to prevent duplicate events when scraped_data has multiple rows for the same URL."""
+        Matches the legacy primary IG (events.ig) and secondary memberships
+        in event_interest_groups. Uses DISTINCT ON to prevent duplicate events
+        when scraped_data has multiple rows for the same URL or an event has
+        several IG memberships.
+
+        When pending_ig/pending_channel are given (notifier path), an event is
+        eligible unless that specific (event, IG, channel) delivery is logged.
+        In that mode the legacy global sent filter is intentionally NOT applied:
+        one IG's delivery must not suppress another IG's. Callers that want the
+        legacy global behavior omit the pending arguments.
+        """
         inner_query = """
             SELECT DISTINCT ON (e.apply_link)
                 e.id, e.title, e.apply_link, e.ig, e.category, e.summary,
@@ -357,12 +382,25 @@ class DatabaseFacade:
                 s.source as source_engine
             FROM events e
             LEFT JOIN scraped_data s ON e.apply_link = s.url AND e.ig = s.ig
-            WHERE e.ig = %s
+            LEFT JOIN event_interest_groups jig
+                ON jig.event_id = e.id AND jig.ig_name = %s
+            WHERE (e.ig = %s OR jig.ig_name IS NOT NULL)
             AND e.category = %s
         """
-        params = [ig, category]
-        
-        if not include_sent:
+        params = [ig, ig, category]
+
+        pending_mode = pending_ig is not None and pending_channel is not None
+        if pending_mode:
+            inner_query += """
+            AND NOT EXISTS (
+                SELECT 1 FROM event_deliveries d
+                WHERE d.event_id = e.id
+                  AND d.ig_name = %s
+                  AND d.channel = %s
+            )
+            """
+            params.extend([pending_ig, pending_channel])
+        elif not include_sent:
             inner_query += " AND (e.zulip_sent = FALSE OR e.zulip_sent IS NULL)"
             
         inner_query, params = self._append_orchestrator_time_filter(inner_query, params, column="e.created_at")

@@ -10,6 +10,7 @@ from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 from src.db.postgres_database import DatabaseFacade
 from src.utils.ig_normalizer import normalize_ig
+from src.config.sources import group_feeds_by_url
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -278,7 +279,14 @@ async def run_rss_agent():
                 return True
         return False
 
-    async def process_rss_feed(feed_url, browser, ig_category):
+    async def process_rss_feed(feed_url, browser, ig_categories):
+        """Fetch one feed URL once; attribute entries to each listed IG.
+
+        Accepts a single IG name or a list of IG names (shared feeds).
+        Entry-level deduplication semantics are unchanged.
+        """
+        if isinstance(ig_categories, str):
+            ig_categories = [ig_categories]
         try:
             logger.info(f"Fetching RSS: {feed_url} [{ig_category}]")
             async with httpx.AsyncClient(follow_redirects=True, timeout=10.0,
@@ -297,81 +305,82 @@ async def run_rss_agent():
             stats["entries_found"] += len(feed.entries[:5])
             logger.info(f"[RSS] {feed_url} -> {len(feed.entries)} entries, processing top 5")
 
-            for entry in feed.entries[:5]:
-                async with semaphore:
-                    link  = entry.get("link")
-                    title = entry.get("title", "No Title")
+            for ig_category in ig_categories:
+                for entry in feed.entries[:5]:
+                    async with semaphore:
+                        link  = entry.get("link")
+                        title = entry.get("title", "No Title")
 
-                    if not link:
-                        continue
-                    if link in seen_urls:
-                        stats["duplicates_skipped"] += 1
-                        continue
-                    seen_urls.add(link)
+                        if not link:
+                            continue
+                        if link in seen_urls:
+                            stats["duplicates_skipped"] += 1
+                            continue
+                        seen_urls.add(link)
 
-                    # Near-duplicate detection across feeds
-                    if _is_near_duplicate(title):
-                        logger.info(f"  [Skip] Near-duplicate title: {title[:60]}")
-                        stats["near_duplicates_skipped"] += 1
-                        continue
-                    seen_titles.append((_title_words(title), title))
+                        # Near-duplicate detection across feeds
+                        if _is_near_duplicate(title):
+                            logger.info(f"  [Skip] Near-duplicate title: {title[:60]}")
+                            stats["near_duplicates_skipped"] += 1
+                            continue
+                        seen_titles.append((_title_words(title), title))
 
-                    if db.link_exists(link, ig_category):
-                        logger.info(f"  [Skip] Already in DB: {link[:60]}")
-                        stats["duplicates_skipped"] += 1
-                        continue
+                        if db.link_exists(link, ig_category):
+                            logger.info(f"  [Skip] Already in DB: {link[:60]}")
+                            stats["duplicates_skipped"] += 1
+                            continue
 
-                    logger.info(f"\n── RSS Item: {title} | {link}")
+                        logger.info(f"\n── RSS Item: {title} | {link}")
 
-                    if any(spam in link for spam in SPAM_DOMAINS):
-                        logger.info("  [Skip] Spam domain filtered.")
-                        continue
+                        if any(spam in link for spam in SPAM_DOMAINS):
+                            logger.info("  [Skip] Spam domain filtered.")
+                            continue
 
-                    result = await scrape_url(link, browser)
-                    if not result:
-                        logger.info(f"  [Fail] RSS item scrape failed: {link[:50]}")
-                        stats["scrape_failures"] += 1
-                        continue
+                        result = await scrape_url(link, browser)
+                        if not result:
+                            logger.info(f"  [Fail] RSS item scrape failed: {link[:50]}")
+                            stats["scrape_failures"] += 1
+                            continue
 
-                    # Track scrape layer
-                    layer = result.get("layer", "L1")
-                    if layer in stats["scrape_layers"]:
-                        stats["scrape_layers"][layer] += 1
+                        # Track scrape layer
+                        layer = result.get("layer", "L1")
+                        if layer in stats["scrape_layers"]:
+                            stats["scrape_layers"][layer] += 1
 
-                    # Build data dict with RSS summary and category for downstream agents
-                    rss_summary = entry.get("summary", "")
-                    if rss_summary:
-                        from bs4 import BeautifulSoup as _BS
-                        rss_summary = _BS(rss_summary, "html.parser").get_text(separator=' ', strip=True)
+                        # Build data dict with RSS summary and category for downstream agents
+                        rss_summary = entry.get("summary", "")
+                        if rss_summary:
+                            from bs4 import BeautifulSoup as _BS
+                            rss_summary = _BS(rss_summary, "html.parser").get_text(separator=' ', strip=True)
 
-                    # Extract published timestamp for recency bonus in intelligence agent
-                    import calendar
-                    published_at = None
-                    pub_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
-                    if pub_parsed:
-                        try:
-                            published_at = calendar.timegm(pub_parsed)
-                        except Exception:
-                            pass
+                        # Extract published timestamp for recency bonus in intelligence agent
+                        import calendar
+                        published_at = None
+                        pub_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+                        if pub_parsed:
+                            try:
+                                published_at = calendar.timegm(pub_parsed)
+                            except Exception:
+                                pass
 
-                    item_data = {
-                        "summary": rss_summary,
-                        "category": "News",
-                        "ig_tags": [ig_category],
-                        "scraped_full_text": result["text"],
-                        "scraped_page_title": result["page_title"],
-                        "scraped_meta_description": result["meta_description"],
-                    }
-                    if published_at is not None:
-                        item_data["published_at"] = published_at
+                        item_data = {
+                            "summary": rss_summary,
+                            "category": "News",
+                            "ig_tags": [ig_category],
+                            "scraped_full_text": result["text"],
+                            "scraped_page_title": result["page_title"],
+                            "scraped_meta_description": result["meta_description"],
+                        }
+                        if published_at is not None:
+                            item_data["published_at"] = published_at
 
-                    doc_id = db.scrapes.insert_queue(
-                        title, link, ig_category, "RSS", "scraped", data=item_data
-                    )
-                    if doc_id:
-                        stats["items_inserted"] += 1
-                        logger.info(f"  [saved:{link[:40]}] "
-                                    f"(RSS) layer={result['layer']} words={len(result['text'].split())}")
+                        doc_id = db.scrapes.insert_queue(
+                            title, link, ig_category, "RSS", "scraped", data=item_data
+                        )
+                        if doc_id:
+                            stats["items_inserted"] += 1
+                            logger.info(f"  [saved:{link[:40]}] "
+                                        f"(RSS) layer={result['layer']} words={len(result['text'].split())}")
         except Exception as e:
             logger.info(f"[RSS Error] {feed_url} -> {e}")
 
@@ -381,15 +390,42 @@ async def run_rss_agent():
     normalized_feeds = {}
     for ig_key, feeds in ALL_RSS_FEEDS.items():
         canonical = normalize_ig(ig_key) or ig_key
-        normalized_feeds[canonical] = feeds
+        normalized_feeds.setdefault(canonical, [])
+        for feed_url in feeds or []:
+            if feed_url not in normalized_feeds[canonical]:
+                normalized_feeds[canonical].append(feed_url)
+
+    # Discovery readiness vs the registry (reported, never invented).
+    try:
+        from src.config.interest_groups import registry
+        _active = registry.all_active_names()
+        _with_feeds = [ig for ig in _active if normalized_feeds.get(ig)]
+        _without_feeds = [ig for ig in _active if not normalized_feeds.get(ig)]
+        stats["igs_configured"] = len(_active)
+        stats["igs_with_feeds"] = len(_with_feeds)
+        stats["igs_without_feeds"] = len(_without_feeds)
+        logger.info(
+            "Discovery readiness: %d/%d active IGs have RSS feeds.",
+            len(_with_feeds), len(_active),
+        )
+        if _without_feeds:
+            logger.info(
+                "IGs without RSS feeds (not discovery-ready via RSS): %s",
+                ", ".join(_without_feeds),
+            )
+    except Exception as e:
+        logger.warning(f"Could not compute discovery readiness: {e}")
+
+    # Fetch each unique feed URL once; attribute its entries to every IG
+    # that lists it (shared feeds are not re-fetched).
+    feed_igs = group_feeds_by_url(normalized_feeds)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         logger.info("\n--- Scraping RSS Feeds ---")
         tasks = []
-        for ig_category, feeds in normalized_feeds.items():
-            for feed_url in feeds:
-                tasks.append(process_rss_feed(feed_url, browser, ig_category))
+        for feed_url, ig_categories in feed_igs.items():
+            tasks.append(process_rss_feed(feed_url, browser, ig_categories))
         await asyncio.gather(*tasks)
         await browser.close()
 

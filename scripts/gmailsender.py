@@ -7,10 +7,37 @@ import psycopg2
 from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 from src.config.logging_config import setup_logging
+from src.db.deliveries import ensure_delivery_schema, record_deliveries, CHANNEL_EMAIL
 
 load_dotenv()
 setup_logging()
 logger = logging.getLogger(__name__)
+
+def resolve_email_recipients(ig_mails_rows):
+    """Union registry emails (base) with ig_mails DB rows (override).
+
+    Keys are normalized to canonical IG names (same normalize-with-fallback
+    behavior as before). A DB row always wins over the registry address for
+    the same canonical IG. IGs with no destination are absent: callers must
+    report them as skipped, never marked delivered.
+    """
+    from src.config.interest_groups import registry
+    from src.utils.ig_normalizer import normalize_ig
+
+    try:
+        merged = registry.get_email_recipients()
+    except Exception:
+        merged = {}
+    for record in ig_mails_rows or []:
+        raw_ig = record['ig']
+        email = record['email']
+        ig = normalize_ig(raw_ig)
+        if not ig:
+            ig = raw_ig.strip() if raw_ig else None
+        if ig and email:
+            merged[ig] = email
+    return merged
+
 
 def send_email(subject, body, receiver):
     sender   = os.getenv("GMAIL_SENDER")
@@ -40,7 +67,14 @@ def run_email_agent():
         logger.error(
             "GMAIL_SENDER or GMAIL_APP_PASSWORD not set in .env — cannot send emails."
         )
-        return
+        return {
+            "igs_configured": 0,
+            "igs_with_recipients": 0,
+            "igs_processed": 0,
+            "igs_skipped_cap": 0,
+            "igs_unconfigured": 0,
+            "emails_sent": 0,
+        }
 
     # Database connection
     db_url = os.getenv("DATABASE_URL")
@@ -57,63 +91,97 @@ def run_email_agent():
         conn.autocommit = True
         cursor = conn.cursor(cursor_factory=DictCursor)
 
-        # Fetch IG to email mappings
+        # Delivery log table (+ conservative backfill); idempotent.
+        ensure_delivery_schema(cursor)
+
+        # Fetch IG to email mappings (DB rows override registry addresses).
         cursor.execute("SELECT ig, email FROM ig_mails")
         ig_email_records = cursor.fetchall()
 
-        if not ig_email_records:
+        from src.config.settings import MAX_IGS_PER_RUN, NOTIFY_PER_IG_LIMIT
+        from src.config.interest_groups import apply_ig_cap, registry
+
+        recipients = resolve_email_recipients(ig_email_records)
+        ig_list, skipped_igs = apply_ig_cap(sorted(recipients.keys()), MAX_IGS_PER_RUN)
+        stats = {
+            "igs_configured": len(registry.all_active_names()),
+            "igs_with_recipients": len(recipients),
+            "igs_processed": 0,
+            "igs_skipped_cap": len(skipped_igs),
+            "igs_unconfigured": 0,
+            "emails_sent": 0,
+        }
+        if not recipients:
             logger.warning(
-                "No email mappings found in the 'ig_mails' table. "
-                "Insert rows (ig, email) to enable email delivery."
+                "No email destinations found in 'ig_mails' or the registry. "
+                "Insert rows (ig, email) or configure registry emails to enable delivery."
             )
-            return
+            return stats
+        if skipped_igs:
+            logger.warning(
+                "Email capped to %d/%d IGs (MAX_IGS_PER_RUN=%s); skipped: %s",
+                len(ig_list), len(recipients), MAX_IGS_PER_RUN, ", ".join(skipped_igs),
+            )
+        no_recipient = sorted(set(registry.all_active_names()) - set(recipients))
+        if no_recipient:
+            logger.info(
+                "IGs without email recipients (not deliverable, never marked): %s",
+                ", ".join(no_recipient),
+            )
+            stats["igs_unconfigured"] = len(no_recipient)
 
-        logger.info("Found %d IG→email mappings in ig_mails.", len(ig_email_records))
+        logger.info("Found %d IG→email destinations (DB + registry).", len(recipients))
 
-        for record in ig_email_records:
-            raw_ig = record['ig']
-            email = record['email']
+        for ig in ig_list:
+            email = recipients[ig]
 
-            # Normalise IG name; fall back to the raw value when it is already
-            # a canonical name that normalize_ig doesn't list as an alias.
-            from src.utils.ig_normalizer import normalize_ig
-            ig = normalize_ig(raw_ig)
-            if not ig:
-                # The raw value may already be a canonical IG name stored
-                # directly in the events table — use it as-is.
-                ig = raw_ig.strip()
-                logger.info(
-                    "IG '%s' not in normalizer alias list; using raw value '%s'.",
-                    raw_ig, ig,
-                )
-
-            # Fetch unsent News for this IG (case-insensitive, ordered by validity_score, limit 20)
+            # Fetch pending News for this IG: legacy primary IG or junction
+            # membership, excluding only this (event, IG) email delivery.
+            # The legacy global mail_sent flag is intentionally NOT consulted:
+            # one IG's send must not suppress another IG's delivery.
+            # (case-insensitive, ordered by validity_score, limit 20)
             cursor.execute(
                 """
-                SELECT id, category, summary, apply_link, platform, location, deadline
-                FROM events
-                WHERE LOWER(ig) = LOWER(%s)
-                    AND category = 'News'
-                    AND mail_sent = FALSE
-                ORDER BY validity_score DESC, created_at DESC
-                LIMIT 20
+                SELECT DISTINCT e.id, e.category, e.summary, e.apply_link,
+                    e.platform, e.location, e.deadline
+                FROM events e
+                LEFT JOIN event_interest_groups jig
+                    ON jig.event_id = e.id AND LOWER(jig.ig_name) = LOWER(%s)
+                WHERE (LOWER(e.ig) = LOWER(%s) OR jig.ig_name IS NOT NULL)
+                    AND e.category = 'News'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM event_deliveries d
+                        WHERE d.event_id = e.id
+                          AND d.ig_name = %s
+                          AND d.channel = 'email'
+                    )
+                ORDER BY e.validity_score DESC, e.created_at DESC
+                LIMIT %s
                 """,
-                (ig,)
+                (ig, ig, ig, NOTIFY_PER_IG_LIMIT)
             )
             news_events = cursor.fetchall()
 
-            # Fetch unsent Hackathons for this IG (case-insensitive, ordered by validity_score, limit 20)
+            # Fetch pending Hackathons for this IG (same membership semantics)
             cursor.execute(
                 """
-                SELECT id, category, summary, apply_link, platform, location, deadline
-                FROM events
-                WHERE LOWER(ig) = LOWER(%s)
-                    AND category = 'Hackathons'
-                    AND mail_sent = FALSE
-                ORDER BY validity_score DESC, created_at DESC
-                LIMIT 20
+                SELECT DISTINCT e.id, e.category, e.summary, e.apply_link,
+                    e.platform, e.location, e.deadline
+                FROM events e
+                LEFT JOIN event_interest_groups jig
+                    ON jig.event_id = e.id AND LOWER(jig.ig_name) = LOWER(%s)
+                WHERE (LOWER(e.ig) = LOWER(%s) OR jig.ig_name IS NOT NULL)
+                    AND e.category = 'Hackathons'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM event_deliveries d
+                        WHERE d.event_id = e.id
+                          AND d.ig_name = %s
+                          AND d.channel = 'email'
+                    )
+                ORDER BY e.validity_score DESC, e.created_at DESC
+                LIMIT %s
                 """,
-                (ig,)
+                (ig, ig, ig, NOTIFY_PER_IG_LIMIT)
             )
             hack_events = cursor.fetchall()
 
@@ -187,14 +255,18 @@ def run_email_agent():
                 )
                 continue
 
-            # Mark events as sent
+            # Mark events as sent: per-(event, IG) delivery log first (only
+            # this IG; other IGs stay pending), then the legacy global flag
+            # for backward compatibility. Runs only after a successful send.
             event_ids = tuple([e['id'] for e in events])
             if event_ids:
+                record_deliveries(cursor, event_ids, ig, CHANNEL_EMAIL)
                 cursor.execute(
                     "UPDATE events SET mail_sent = TRUE WHERE id IN %s",
                     (event_ids,)
                 )
                 logger.info("[%s] Marked %d events as mail_sent=TRUE.", ig, len(event_ids))
+            stats["igs_processed"] += 1
 
     except psycopg2.Error as e:
         logger.error("Email Agent database error: %s", e)
@@ -210,7 +282,14 @@ def run_email_agent():
         if conn is not None:
             conn.close()
 
-    logger.info("Email Agent done. Sent %d digest email(s).", emails_sent)
+    stats["emails_sent"] = emails_sent
+    logger.info(
+        "Email Agent done. Sent %d digest email(s): configured=%d "
+        "with_recipients=%d processed=%d unconfigured=%d.",
+        emails_sent, stats["igs_configured"], stats["igs_with_recipients"],
+        stats["igs_processed"], stats["igs_unconfigured"],
+    )
+    return stats
 
 if __name__ == "__main__":
     run_email_agent()

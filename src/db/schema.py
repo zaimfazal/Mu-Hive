@@ -1,4 +1,5 @@
 from src.db.connection import db_conn
+from src.db.deliveries import ensure_delivery_schema
 
 def initialize_schema():
     """Initializes the PostgreSQL database schema if tables don't exist."""
@@ -90,7 +91,30 @@ def initialize_schema():
                 SELECT id, ig FROM events
                 WHERE ig IS NOT NULL AND ig != ''
                 ON CONFLICT (event_id, ig_name) DO NOTHING;
+
+                -- Backfill secondary IGs from validated multi-tag classifications
+                -- stored on scraped_data. Repeatable: ON CONFLICT DO NOTHING.
+                -- Rollback: TRUNCATE event_interest_groups, then re-run this
+                -- initializer to rebuild from events.ig + validated tags.
+                INSERT INTO event_interest_groups (event_id, ig_name)
+                SELECT DISTINCT e.id, trim(jt.tag)
+                FROM events e
+                JOIN scraped_data s ON s.url = e.apply_link
+                CROSS JOIN LATERAL jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(s.data -> 'validated_tags') = 'array'
+                         THEN s.data -> 'validated_tags'
+                         WHEN jsonb_typeof(s.data -> 'ig_tags') = 'array'
+                         THEN s.data -> 'ig_tags'
+                         ELSE '[]'::jsonb END) AS jt(tag)
+                WHERE jt.tag IS NOT NULL
+                  AND trim(jt.tag) != ''
+                  AND lower(trim(jt.tag)) != 'unknown'
+                ON CONFLICT (event_id, ig_name) DO NOTHING;
             """)
+
+            # Per-(event, IG, channel) delivery log (Phase 4A) + conservative
+            # backfill from the legacy global sent flags.
+            ensure_delivery_schema(cur)
 
 
 

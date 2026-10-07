@@ -52,10 +52,14 @@ def test_db():
             conn.close()
             return False
 
-        # Ensure that test data is generated for each of the 3 active IGs
+        # Placeholder mail mappings are written ONLY with explicit opt-in.
+        # verify_setup.py must never write placeholder emails to a production
+        # database by accident: without SEED_DEFAULT_IG_MAILS=true it only
+        # validates and reports what is missing.
         # (AI, Cyber Security, Web Development) in the table ig_mails (default: test-email@gmail.com) if missing
         active_igs = ["AI", "Cyber Security", "Web Development"]
-        
+        seed_allowed = os.getenv("SEED_DEFAULT_IG_MAILS", "false").lower() == "true"
+
         # Check if ig_mails table exists first
         cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ig_mails');")
         ig_mails_exists = cursor.fetchone()[0]
@@ -68,15 +72,26 @@ def test_db():
                     email TEXT NOT NULL
                 );
             """)
-        
-        for ig in active_igs:
-            cursor.execute("SELECT 1 FROM ig_mails WHERE ig = %s", (ig,))
-            if not cursor.fetchone():
-                cursor.execute(
-                    "INSERT INTO ig_mails (ig, email) VALUES (%s, %s) ON CONFLICT (ig) DO NOTHING",
-                    (ig, "test-email@gmail.com")
-                )
-                print(f"[OK]   DATABASE: Inserted default mail mapping for IG: {ig}")
+
+        if not seed_allowed:
+            cursor.execute("SELECT ig FROM ig_mails")
+            existing_igs = {row[0] for row in cursor.fetchall()}
+            missing_igs = [ig for ig in active_igs if ig not in existing_igs]
+            if missing_igs:
+                print(f"[WARN] DATABASE: ig_mails has no mapping for: {', '.join(missing_igs)}. "
+                      f"Set SEED_DEFAULT_IG_MAILS=true to insert placeholder mappings, "
+                      f"or insert real recipient addresses.")
+            else:
+                print("[OK]   DATABASE: ig_mails mappings present for active IGs.")
+        else:
+            for ig in active_igs:
+                cursor.execute("SELECT 1 FROM ig_mails WHERE ig = %s", (ig,))
+                if not cursor.fetchone():
+                    cursor.execute(
+                        "INSERT INTO ig_mails (ig, email) VALUES (%s, %s) ON CONFLICT (ig) DO NOTHING",
+                        (ig, "test-email@gmail.com")
+                    )
+                    print(f"[OK]   DATABASE: Inserted default mail mapping for IG: {ig}")
 
         # Counts
         cursor.execute("SELECT COUNT(*) FROM scraped_data")

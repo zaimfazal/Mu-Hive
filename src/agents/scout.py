@@ -43,45 +43,12 @@ try:
 except ImportError:
     HAS_NEWSPAPER = False
 
-# --- Curated, IG-specific search queries for relevance ---
-SEARCH_QUERIES = {
-    "AI": {
-        "news": [
-            "artificial intelligence AI breakthroughs 2026",
-            "LLM large language model releases news",
-            "generative AI industry updates",
-        ],
-        "hackathons": ["AI machine learning hackathon 2026"],
-    },
-    "Web Development": {
-        "news": [
-            "web development JavaScript React framework news 2026",
-            "frontend backend web dev trends",
-        ],
-        "hackathons": ["web development hackathon frontend backend 2026"],
-    },
-    "UI/UX": {
-        "news": [
-            "UX design trends user experience 2026",
-            "Figma UI design product design updates",
-        ],
-        "hackathons": ["UI UX design hackathon designathon 2026"],
-    },
-    "Cyber Security": {
-        "news": [
-            "cybersecurity vulnerability zero-day threat 2026",
-            "infosec security breach advisory news",
-        ],
-        "hackathons": ["CTF capture the flag cybersecurity hackathon 2026"],
-    },
-    "Data Science": {
-        "news": [
-            "data science analytics trends 2026",
-            "big data engineering visualization news",
-        ],
-        "hackathons": ["data science analytics Kaggle hackathon 2026"],
-    },
-}
+# --- Registry-driven search queries (single source: interest_groups.yaml) ---
+# Legacy standalone scout (run_scout_async) shares the same configured queries
+# as the live pipeline; nothing is hard-coded here anymore.
+from src.config.interest_groups import registry as _ig_registry
+
+SEARCH_QUERIES = _ig_registry.search_plan()
 
 
 def clean_html(html_content):

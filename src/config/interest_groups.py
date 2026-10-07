@@ -124,6 +124,80 @@ class InterestGroupRegistry:
             if ig.email
         }
 
+    def search_plan(self, max_queries_per_ig: int = 2) -> dict[str, dict[str, list[str]]]:
+        """Configured search queries per active IG, capped per category.
+
+        Returns {ig_name: {"news": [...], "hackathons": [...]}}. Active IGs
+        without usable queries are absent (not discovery-ready); callers must
+        report them, never invent queries.
+        """
+        plan: dict[str, dict[str, list[str]]] = {}
+        for ig in self.all_active():
+            queries = ig.search_queries or {}
+            entry: dict[str, list[str]] = {}
+            for category in ("news", "hackathons"):
+                items = [q.strip() for q in (queries.get(category) or []) if q and q.strip()]
+                capped = items[:max(0, max_queries_per_ig)]
+                if capped:
+                    entry[category] = capped
+            if entry:
+                plan[ig.name] = entry
+        return plan
+
+    def discovery_readiness(self, feeds_by_ig: dict[str, list] | None = None) -> dict[str, dict[str, bool]]:
+        """Per-active-IG source/destination availability (no defaults invented)."""
+        feeds_by_ig = feeds_by_ig or {}
+        channels = self.get_zulip_channels()
+        recipients = self.get_email_recipients()
+        readiness: dict[str, dict[str, bool]] = {}
+        for ig in self.all_active():
+            queries = ig.search_queries or {}
+            has_queries = any(
+                q and str(q).strip()
+                for category in ("news", "hackathons")
+                for q in (queries.get(category) or [])
+            )
+            readiness[ig.name] = {
+                "queries": bool(has_queries),
+                "feeds": bool(feeds_by_ig.get(ig.name)),
+                "zulip": ig.name in channels,
+                "email": ig.name in recipients,
+            }
+        return readiness
+
+
+def shared_query_index(plan: dict[str, dict[str, list[str]]]) -> dict[str, list[tuple[str, str]]]:
+    """Invert a search plan to {query: [(ig, category), ...]}, deduplicated.
+
+    The same query string shared by several IGs is executed once and its
+    results attributed to every listed IG.
+    """
+    index: dict[str, list[tuple[str, str]]] = {}
+    for ig_name, categories in (plan or {}).items():
+        for category, queries in (categories or {}).items():
+            for query in queries or []:
+                query = str(query).strip()
+                if not query:
+                    continue
+                owners = index.setdefault(query, [])
+                if (ig_name, category) not in owners:
+                    owners.append((ig_name, category))
+    return index
+
+
+def apply_ig_cap(igs: list[str], max_igs: int | None) -> tuple[list[str], list[str]]:
+    """Split an IG list into (processed, skipped) under a total cap."""
+    ordered = list(igs or [])
+    if max_igs is None:
+        return ordered, []
+    try:
+        cap = int(max_igs)
+    except (TypeError, ValueError):
+        return ordered, []
+    if cap < 0:
+        return ordered, []
+    return ordered[:cap], ordered[cap:]
+
 
 # Global shared instance
 registry = InterestGroupRegistry()

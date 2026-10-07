@@ -102,7 +102,7 @@ def get_tavily_results(query, max_results=5):
     response = requests.post(url, json=payload, headers=headers, timeout=15)
     response.raise_for_status()
     data = response.json()
-    
+
     results = []
     for item in data.get('results', [])[:max_results]:
         results.append({
@@ -110,6 +110,136 @@ def get_tavily_results(query, max_results=5):
             'url': item.get('url', 'No Link')
         })
     return results
+
+
+def run_registry_search(db, query_index, max_results=3):
+    """Run web discovery from a deduplicated registry search plan.
+
+    query_index maps one query string to [(ig, category), ...] (see
+    shared_query_index); each query string is executed once and its results
+    attributed to every listed IG. Canonical URL deduplication is per
+    (link, IG) so one event can acquire multiple valid IG associations.
+    Returns a stats dict for phase reporting.
+    """
+    from src.utils.ig_normalizer import normalize_ig
+
+    stats = {
+        "queries_requested": len(query_index or {}),
+        "queries_run": 0,
+        "igs_covered": 0,
+        "items_inserted": 0,
+        "duplicates_skipped": 0,
+        # Provider-attempt diagnostics (aggregate counts, not payloads).
+        "provider_calls": {"ddg": 0, "tavily": 0},
+        "tavily_fallbacks": 0,
+    }
+    if not query_index:
+        logger.info("Registry search plan is empty; nothing to discover.")
+        return stats
+
+    try:
+        from ddgs import DDGS
+        ddgs = DDGS()
+    except Exception as e:
+        logger.info(f"   [!] Search provider unavailable ({e}). Skipping registry search.")
+        return stats
+
+    SPAM_DOMAINS = ["bloguerosa.com", "qodsblog.com", "blogdeazar.com", "blazingblog.com",
+                    "youtube.com", "facebook.com", "instagram.com", "tiktok.com"]
+    LOW_TLDS = [".xyz", ".info", ".top", ".cc", ".biz"]
+    covered = set()
+
+    for query, owners in (query_index or {}).items():
+        # Normalize owner IGs; drop unresolvable ones (reported, not invented).
+        targets = []
+        for ig_name, category in owners or []:
+            canonical = normalize_ig(ig_name) or ig_name
+            if not canonical:
+                logger.info(f"   [Skip] Unresolvable IG '{ig_name}' for query '{query}'.")
+                continue
+            targets.append((canonical, str(category).capitalize()))
+        if not targets:
+            continue
+        stats["queries_run"] += 1
+        logger.info(f"\nResults for '{query}' (IGs: {', '.join(sorted({t[0] for t in targets}))}):")
+        try:
+            results = []
+            source_engine = 'DuckDuckGo'
+            try:
+                results = list(ddgs.text(query, max_results=max_results,
+                                         safesearch='moderate', timelimit='y'))
+                stats["provider_calls"]["ddg"] += 1
+            except Exception as ddg_error:
+                logger.info(f"   [!] DuckDuckGo failed ({ddg_error}). Falling back to Tavily...")
+                source_engine = 'Tavily'
+                stats["tavily_fallbacks"] += 1
+                time.sleep(2)
+                try:
+                    results = get_tavily_results(query, max_results)
+                    stats["provider_calls"]["tavily"] += 1
+                except Exception as t_error:
+                    logger.info(f"   [!] Tavily Search also failed: {t_error}")
+            if not results:
+                logger.info("   No results found.")
+            else:
+                for result in results:
+                    title = result.get('title', 'No Title')
+                    link = result.get('href', result.get('url', 'No Link'))
+                    if not link or link == 'No Link':
+                        continue
+                    if any(spam in link for spam in SPAM_DOMAINS):
+                        continue
+                    if any(link.endswith(tld) or (tld + "/") in link for tld in LOW_TLDS):
+                        continue
+                    summary = result.get('body', result.get('content', result.get('snippet', '')))
+                    for ig_key, category in targets:
+                        covered.add(ig_key)
+                        if db.link_exists(link, ig_key):
+                            stats["duplicates_skipped"] += 1
+                            continue
+                        if db.insert_event(title, link, ig_key, source_engine, 'not processed'):
+                            stats["items_inserted"] += 1
+        except Exception as e:
+            logger.info(f"   Error searching for '{query}': {e}")
+        time.sleep(1)
+
+    stats["igs_covered"] = len(covered)
+    logger.info(f"Registry search done: {stats['queries_run']} queries, "
+                f"{stats['items_inserted']} inserted across {stats['igs_covered']} IGs.")
+    return stats
+
+
+def build_search_dry_run(registry, max_queries_per_ig, max_docs_to_intelligence,
+                         search_enabled=False):
+    """Describe what a registry search run WOULD do. No network, no DB.
+
+    Returns aggregate counts only: active IGs and readiness, unique queries
+    after deduplication, expected provider query count, the Intelligence
+    admission cap, and groups lacking delivery destinations. Never executes
+    provider calls regardless of the enabled flag.
+    """
+    from src.config.interest_groups import shared_query_index
+
+    active = registry.all_active_names()
+    plan = registry.search_plan(max_queries_per_ig)
+    index = shared_query_index(plan)
+    readiness = registry.discovery_readiness()
+    without_queries = sorted(set(active) - set(plan.keys()))
+    without_destinations = sorted(
+        name for name in active
+        if not (readiness.get(name, {}).get("zulip")
+                or readiness.get(name, {}).get("email"))
+    )
+    return {
+        "search_enabled": bool(search_enabled),
+        "igs_configured": len(active),
+        "igs_ready": len(plan),
+        "igs_without_queries": without_queries,
+        "unique_queries": len(index),
+        "expected_query_count": len(index),
+        "max_docs_to_intelligence": max_docs_to_intelligence,
+        "igs_without_destinations": without_destinations,
+    }
 
 
 def main():

@@ -18,6 +18,11 @@ def groq_quota_available() -> bool:
     remaining = GROQ_TPD_LIMIT - _groq_tokens_used
     return remaining > GROQ_SAFETY_BUFFER
 
+
+def get_groq_tokens_used() -> int:
+    """Current high-water mark (observability only; monotonic within process)."""
+    return _groq_tokens_used
+
 def parse_and_record_groq_usage(error_message: str):
     # Format: "Used 499952, Requested 728"
     match = re.search(r"used\s+(\d+)", error_message, re.IGNORECASE)

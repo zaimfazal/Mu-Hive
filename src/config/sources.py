@@ -93,6 +93,23 @@ ALL_RSS_FEEDS = {
     "Data Science": DATA_SCIENCE_RSS_FEEDS,
 }
 
+
+def group_feeds_by_url(feeds_by_ig: dict) -> dict:
+    """Group {ig: [feed urls]} into {feed url: [igs]} preserving order.
+
+    Shared feed URLs are fetched once and attributed to every IG that lists
+    them, instead of being requested repeatedly.
+    """
+    grouped: dict = {}
+    for ig_name, urls in (feeds_by_ig or {}).items():
+        for url in urls or []:
+            if not url:
+                continue
+            owners = grouped.setdefault(url, [])
+            if ig_name not in owners:
+                owners.append(ig_name)
+    return grouped
+
 # Source priority boost for quality scoring.
 # Added to the LLM quality_score (capped at 10) to prioritize trusted sources.
 SOURCE_PRIORITY = {

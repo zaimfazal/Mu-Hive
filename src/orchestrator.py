@@ -6,11 +6,19 @@ from src.agents.intelligence import run_intelligence, LLMFailureThresholdExceede
 from src.agents.communicator import run_communicator
 from src.db.orchestrator_writer import save_orchestrator_events
 from src.config.logging_config import setup_logging
+from src.config.settings import (
+    INTELLIGENCE_MAX_DOCS_PER_RUN,
+    SEARCH_ENABLED,
+    SEARCH_MAX_RESULTS_PER_QUERY,
+    DISCOVERY_MAX_QUERIES_PER_IG,
+)
+from src.config.interest_groups import registry, shared_query_index
 
 logger = logging.getLogger(__name__)
 
 # --- Pipeline Configuration ---
-INTELLIGENCE_BATCH_LIMIT = 30
+# Kept for backward compatibility; the authority is settings.INTELLIGENCE_MAX_DOCS_PER_RUN.
+INTELLIGENCE_BATCH_LIMIT = INTELLIGENCE_MAX_DOCS_PER_RUN
 
 
 class Orchestrator:
@@ -96,6 +104,7 @@ async def run_pipeline():
 
     # Phase 1: Scout — Search & Scraping
     rss_stats = None
+    search_stats = None
     scraper_stats = None
     try:
         logger.info("Phase 1: Running Scout Agent (Search & Scraping)...")
@@ -111,7 +120,48 @@ async def run_pipeline():
             save_result["inserted_scraped"],
             save_result["upserted_events"],
         )
-        
+
+        # Phase 1b': Registry-driven web search (opt-in via SEARCH_ENABLED;
+        # off by default to preserve the current workload). The dry-run
+        # report is always logged (no network); execution is gated.
+        from src.scraping.search_engine import build_search_dry_run
+        from src.config.settings import INTELLIGENCE_MAX_DOCS_PER_RUN
+        dry_run = build_search_dry_run(
+            registry, DISCOVERY_MAX_QUERIES_PER_IG,
+            INTELLIGENCE_MAX_DOCS_PER_RUN, SEARCH_ENABLED,
+        )
+        logger.info(
+            "Search dry-run: enabled=%s configured=%d ready=%d "
+            "unique_queries=%d max_docs_to_intelligence=%d "
+            "without_queries=%s without_destinations=%s",
+            dry_run["search_enabled"], dry_run["igs_configured"],
+            dry_run["igs_ready"], dry_run["unique_queries"],
+            dry_run["max_docs_to_intelligence"],
+            ", ".join(dry_run["igs_without_queries"]) or "none",
+            ", ".join(dry_run["igs_without_destinations"]) or "none",
+        )
+        if SEARCH_ENABLED:
+            logger.info("Running registry search discovery...")
+            plan = registry.search_plan(DISCOVERY_MAX_QUERIES_PER_IG)
+            query_index = shared_query_index(plan)
+            if query_index:
+                from src.db.postgres_database import DatabaseFacade as _Database
+                from src.scraping.search_engine import run_registry_search
+                _search_db = _Database()
+                try:
+                    search_stats = await asyncio.to_thread(
+                        run_registry_search,
+                        _search_db, query_index, SEARCH_MAX_RESULTS_PER_QUERY,
+                    )
+                finally:
+                    _search_db.close()
+            else:
+                search_stats = {"queries_requested": 0, "queries_run": 0,
+                                "igs_covered": 0, "items_inserted": 0,
+                                "duplicates_skipped": 0,
+                                "provider_calls": {"ddg": 0, "tavily": 0},
+                                "tavily_fallbacks": 0}
+
         # Phase 1c: Scrape details for newly added items
         logger.info("Running Scraper Agent to process pending event links...")
         scraper_stats = await run_scraper_agent()
@@ -126,6 +176,9 @@ async def run_pipeline():
     if rss_stats:
         logger.info("  [RSS Agent]")
         _log_phase_report("RSS", rss_stats)
+    if search_stats:
+        logger.info("  [Registry Search]")
+        _log_phase_report("Search", search_stats)
     if scraper_stats:
         logger.info("  [Scraper Agent]")
         _log_phase_report("Scraper", scraper_stats)
